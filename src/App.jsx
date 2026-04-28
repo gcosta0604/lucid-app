@@ -1034,42 +1034,91 @@ Concise under 120 words, UK English, **bold** key figures only.`,
   };
 
   // ─────────────────────────────────────────────────────────────────────────
-  // ASK OVERLAY
+  // ASK OVERLAY — keyboard-safe version
   // ─────────────────────────────────────────────────────────────────────────
-  const AskOverlay = () => (
-    <div style={{ position:"fixed", inset:0, zIndex:50, display:"flex", flexDirection:"column" }}>
-      <div onClick={() => setAskOpen(false)} style={{ flex:"0 0 80px", background:"rgba(0,0,0,0.6)", backdropFilter:"blur(4px)" }} />
-      <div style={{ flex:1, background:cl.s1, borderTop:`1px solid ${cl.border}`, borderRadius:"20px 20px 0 0", display:"flex", flexDirection:"column", overflow:"hidden" }}>
-        <div style={{ padding:"14px 18px 10px", borderBottom:`1px solid ${cl.border}`, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+  const AskOverlay = () => {
+    const inputRef = useRef(null);
+    const msgsRef  = useRef(null);
+
+    // When keyboard opens the visualViewport shrinks — keep input visible
+    useEffect(() => {
+      const vv = window.visualViewport;
+      if (!vv) return;
+      const handler = () => {
+        if (msgsRef.current) {
+          msgsRef.current.scrollTop = msgsRef.current.scrollHeight;
+        }
+      };
+      vv.addEventListener("resize", handler);
+      return () => vv.removeEventListener("resize", handler);
+    }, []);
+
+    // Auto-scroll messages
+    useEffect(() => {
+      if (msgsRef.current) {
+        msgsRef.current.scrollTop = msgsRef.current.scrollHeight;
+      }
+    }, [msgs, typing]);
+
+    const handleFocus = () => {
+      // Give keyboard time to appear then scroll input into view
+      setTimeout(() => {
+        inputRef.current?.scrollIntoView({ behavior:"smooth", block:"center" });
+        if (msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight;
+      }, 350);
+    };
+
+    const Bubble = ({ msg }) => (
+      <div style={{ display:"flex", justifyContent: msg.role==="user"?"flex-end":"flex-start", marginBottom:10, alignItems:"flex-start" }}>
+        {msg.role==="ai" && (
+          <div style={{ width:26, height:26, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, flexShrink:0, marginRight:7, marginTop:2 }}>L</div>
+        )}
+        <div style={{ maxWidth:"78%", background: msg.role==="user"?cl.accent:cl.s2, color: msg.role==="user"?cl.accentFg:cl.t2, borderRadius: msg.role==="user"?"14px 14px 3px 14px":"14px 14px 14px 3px", padding:"10px 13px", fontSize:13, lineHeight:1.55, border: msg.role==="ai"?`1px solid ${cl.border}`:"none" }}>
+          {msg.text.split(/(\*\*[^*]+\*\*)|\n/g).map((p, j) => {
+            if (!p) return null;
+            if (p.startsWith("**")&&p.endsWith("**")) return <strong key={j} style={{ color: msg.role==="user"?cl.accentFg:cl.t1 }}>{p.slice(2,-2)}</strong>;
+            return <span key={j}>{p}</span>;
+          })}
+        </div>
+      </div>
+    );
+
+    return (
+      // Full-screen overlay — no flex split that fights the keyboard
+      <div style={{ position:"fixed", inset:0, zIndex:50, background:cl.s1, display:"flex", flexDirection:"column" }}>
+
+        {/* Header */}
+        <div style={{ padding:"52px 18px 12px", borderBottom:`1px solid ${cl.border}`, display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0, background:cl.s1 }}>
           <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            <div style={{ width:28, height:28, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:700 }}>L</div>
+            <div style={{ width:32, height:32, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700 }}>L</div>
             <div>
-              <p style={{ fontSize:14, fontWeight:600, color:cl.t1, margin:0 }}>Ask Lucid</p>
-              <p style={{ fontSize:11, color:cl.accent, margin:0 }}>● AI · your real financial data</p>
+              <p style={{ fontSize:15, fontWeight:600, color:cl.t1, margin:0 }}>Ask Lucid</p>
+              <p style={{ fontSize:11, color:cl.accent, margin:0 }}>● Live AI · your real data</p>
             </div>
           </div>
-          <button onClick={() => setAskOpen(false)} style={{ background:"none", border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:8, padding:"5px 10px", cursor:"pointer", fontSize:13 }}>✕</button>
+          <button
+            onClick={() => setAskOpen(false)}
+            style={{ background:"none", border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:10, padding:"7px 14px", cursor:"pointer", fontSize:14, fontWeight:500 }}
+          >
+            Done
+          </button>
         </div>
+
+        {/* Quick prompts */}
         {msgs.length < 2 && (
-          <div style={{ padding:"10px 18px", display:"flex", flexWrap:"wrap", gap:7 }}>
+          <div style={{ padding:"10px 18px 4px", display:"flex", flexWrap:"wrap", gap:7, flexShrink:0 }}>
             {["What are your fees?","How's my budget?","Can I get a Float?","How's my credit?"].map(q => (
-              <button key={q} onClick={() => setInp(q)} style={{ background:cl.s2, border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:20, padding:"6px 12px", fontSize:12, cursor:"pointer" }}>{q}</button>
+              <button key={q}
+                onMouseDown={e => { e.preventDefault(); setInp(q); }}
+                style={{ background:cl.s2, border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:20, padding:"6px 12px", fontSize:12, cursor:"pointer" }}
+              >{q}</button>
             ))}
           </div>
         )}
-        <div style={{ flex:1, overflowY:"auto", padding:"8px 18px" }}>
-          {msgs.map((msg, i) => (
-            <div key={i} style={{ display:"flex", justifyContent: msg.role==="user"?"flex-end":"flex-start", marginBottom:10, alignItems:"flex-start" }}>
-              {msg.role==="ai" && <div style={{ width:26, height:26, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, flexShrink:0, marginRight:7, marginTop:2 }}>L</div>}
-              <div style={{ maxWidth:"78%", background: msg.role==="user"?cl.accent:cl.s2, color: msg.role==="user"?cl.accentFg:cl.t2, borderRadius: msg.role==="user"?"14px 14px 3px 14px":"14px 14px 14px 3px", padding:"10px 13px", fontSize:13, lineHeight:1.55, border: msg.role==="ai"?`1px solid ${cl.border}`:"none" }}>
-                {msg.text.split(/(\*\*[^*]+\*\*)|\n/g).map((p, j) => {
-                  if (!p) return null;
-                  if (p.startsWith("**")&&p.endsWith("**")) return <strong key={j} style={{ color: msg.role==="user"?cl.accentFg:cl.t1 }}>{p.slice(2,-2)}</strong>;
-                  return <span key={j}>{p}</span>;
-                })}
-              </div>
-            </div>
-          ))}
+
+        {/* Messages — scrollable middle */}
+        <div ref={msgsRef} style={{ flex:1, overflowY:"auto", padding:"12px 18px", WebkitOverflowScrolling:"touch" }}>
+          {msgs.map((msg, i) => <Bubble key={i} msg={msg} />)}
           {typing && (
             <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
               <div style={{ width:26, height:26, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700 }}>L</div>
@@ -1078,17 +1127,32 @@ Concise under 120 words, UK English, **bold** key figures only.`,
               </div>
             </div>
           )}
-          <div ref={endRef} />
         </div>
-        <div style={{ padding:"10px 18px 18px", borderTop:`1px solid ${cl.border}`, display:"flex", gap:10 }}>
-          <input value={inp} onChange={e => setInp(e.target.value)} onKeyDown={e => e.key==="Enter" && sendMsg()}
+
+        {/* Input — sticky to bottom, NOT fixed, so keyboard pushes it up naturally */}
+        <div style={{ padding:"10px 18px 28px", borderTop:`1px solid ${cl.border}`, background:cl.s1, display:"flex", gap:10, flexShrink:0 }}>
+          <input
+            ref={inputRef}
+            value={inp}
+            onChange={e => setInp(e.target.value)}
+            onFocus={handleFocus}
+            onKeyDown={e => e.key==="Enter" && sendMsg()}
             placeholder="Ask anything about your money…"
-            style={{ flex:1, background:cl.s2, border:`1px solid ${cl.border}`, borderRadius:12, padding:"11px 14px", color:cl.t1, fontSize:13, outline:"none", fontFamily:ff }} />
-          <button onClick={sendMsg} style={{ width:44, height:44, borderRadius:12, background: inp.trim()?cl.accent:cl.border, color: inp.trim()?cl.accentFg:cl.t3, border:"none", cursor:"pointer", fontSize:18, flexShrink:0, transition:"background 0.15s" }}>→</button>
+            enterKeyHint="send"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="sentences"
+            spellCheck={false}
+            style={{ flex:1, background:cl.s2, border:`1px solid ${cl.border}`, borderRadius:14, padding:"13px 16px", color:cl.t1, fontSize:16, outline:"none", fontFamily:ff, WebkitAppearance:"none" }}
+          />
+          <button
+            onMouseDown={e => { e.preventDefault(); sendMsg(); }}
+            style={{ width:48, height:48, borderRadius:14, background: inp.trim()?cl.accent:cl.border, color: inp.trim()?cl.accentFg:cl.t3, border:"none", cursor:"pointer", fontSize:20, flexShrink:0, transition:"background 0.15s" }}
+          >→</button>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   // ─────────────────────────────────────────────────────────────────────────
   // SHELL
