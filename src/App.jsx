@@ -395,7 +395,6 @@ function CancelScreen({ onBack }) {
 export default function LucidApp() {
   const [tab, setTab]           = useState("home");
   const [meScreen, setMeScreen] = useState("overview");
-  const [askOpen, setAskOpen]   = useState(false);
   const [showCancel, setShowCancel] = useState(false);
   const [msgs, setMsgs] = useState([
     { role:"ai", text:"Hey Gabe 👋 I'm Lucid — your AI finance assistant. I can see your accounts, spending, and credit score. Ask me anything." }
@@ -417,7 +416,7 @@ export default function LucidApp() {
     document.head.appendChild(link);
   }, []);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior:"smooth" }); }, [msgs, askOpen]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior:"smooth" }); }, [msgs]);
 
   // ── Claude API ──────────────────────────────────────────────────────────────
   const sendMsg = async () => {
@@ -1034,39 +1033,16 @@ Concise under 120 words, UK English, **bold** key figures only.`,
   };
 
   // ─────────────────────────────────────────────────────────────────────────
-  // ASK OVERLAY — keyboard-safe version
+  // ASK SCREEN — proper tab, not overlay, keyboard-safe
   // ─────────────────────────────────────────────────────────────────────────
-  const AskOverlay = () => {
+  const AskScreen = () => {
     const inputRef = useRef(null);
     const msgsRef  = useRef(null);
 
-    // When keyboard opens the visualViewport shrinks — keep input visible
     useEffect(() => {
-      const vv = window.visualViewport;
-      if (!vv) return;
-      const handler = () => {
-        if (msgsRef.current) {
-          msgsRef.current.scrollTop = msgsRef.current.scrollHeight;
-        }
-      };
-      vv.addEventListener("resize", handler);
-      return () => vv.removeEventListener("resize", handler);
-    }, []);
-
-    // Auto-scroll messages
-    useEffect(() => {
-      if (msgsRef.current) {
-        msgsRef.current.scrollTop = msgsRef.current.scrollHeight;
-      }
+      // Scroll to bottom when messages change
+      if (msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight;
     }, [msgs, typing]);
-
-    const handleFocus = () => {
-      // Give keyboard time to appear then scroll input into view
-      setTimeout(() => {
-        inputRef.current?.scrollIntoView({ behavior:"smooth", block:"center" });
-        if (msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight;
-      }, 350);
-    };
 
     const Bubble = ({ msg }) => (
       <div style={{ display:"flex", justifyContent: msg.role==="user"?"flex-end":"flex-start", marginBottom:10, alignItems:"flex-start" }}>
@@ -1084,43 +1060,28 @@ Concise under 120 words, UK English, **bold** key figures only.`,
     );
 
     return (
-      // Full-screen overlay — no flex split that fights the keyboard
-      <div
-        style={{ position:"fixed", inset:0, zIndex:50, background:cl.s1, display:"flex", flexDirection:"column" }}
-        onMouseDown={e => { if (e.target !== inputRef.current) e.preventDefault(); }}
-        onTouchStart={e => { if (e.target !== inputRef.current) e.preventDefault(); }}
-      >
-
+      <div style={{ display:"flex", flexDirection:"column", height:"100%" }}>
         {/* Header */}
-        <div style={{ padding:"52px 18px 12px", borderBottom:`1px solid ${cl.border}`, display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0, background:cl.s1 }}>
-          <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-            <div style={{ width:32, height:32, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700 }}>L</div>
-            <div>
-              <p style={{ fontSize:15, fontWeight:600, color:cl.t1, margin:0 }}>Ask Lucid</p>
-              <p style={{ fontSize:11, color:cl.accent, margin:0 }}>● Live AI · your real data</p>
-            </div>
+        <div style={{ padding:"52px 18px 12px", borderBottom:`1px solid ${cl.border}`, display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
+          <div style={{ width:32, height:32, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700 }}>L</div>
+          <div>
+            <p style={{ fontSize:15, fontWeight:600, color:cl.t1, margin:0 }}>Ask Lucid</p>
+            <p style={{ fontSize:11, color:cl.accent, margin:0 }}>● Live AI · your real data</p>
           </div>
-          <button
-            onClick={() => setAskOpen(false)}
-            style={{ background:"none", border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:10, padding:"7px 14px", cursor:"pointer", fontSize:14, fontWeight:500 }}
-          >
-            Done
-          </button>
         </div>
 
         {/* Quick prompts */}
         {msgs.length < 2 && (
           <div style={{ padding:"10px 18px 4px", display:"flex", flexWrap:"wrap", gap:7, flexShrink:0 }}>
             {["What are your fees?","How's my budget?","Can I get a Float?","How's my credit?"].map(q => (
-              <button key={q}
-                onMouseDown={e => { e.preventDefault(); setInp(q); }}
+              <button key={q} onClick={() => setInp(q)}
                 style={{ background:cl.s2, border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:20, padding:"6px 12px", fontSize:12, cursor:"pointer" }}
               >{q}</button>
             ))}
           </div>
         )}
 
-        {/* Messages — scrollable middle */}
+        {/* Messages */}
         <div ref={msgsRef} style={{ flex:1, overflowY:"auto", padding:"12px 18px", WebkitOverflowScrolling:"touch" }}>
           {msgs.map((msg, i) => <Bubble key={i} msg={msg} />)}
           {typing && (
@@ -1133,13 +1094,12 @@ Concise under 120 words, UK English, **bold** key figures only.`,
           )}
         </div>
 
-        {/* Input — sticky to bottom, NOT fixed, so keyboard pushes it up naturally */}
-        <div style={{ padding:"10px 18px 28px", borderTop:`1px solid ${cl.border}`, background:cl.s1, display:"flex", gap:10, flexShrink:0 }}>
+        {/* Input bar — sits in normal flow, keyboard pushes it up naturally */}
+        <div style={{ padding:"10px 18px 18px", borderTop:`1px solid ${cl.border}`, background:cl.s1, display:"flex", gap:10, flexShrink:0 }}>
           <input
             ref={inputRef}
             value={inp}
             onChange={e => setInp(e.target.value)}
-            onFocus={handleFocus}
             onKeyDown={e => e.key==="Enter" && sendMsg()}
             placeholder="Ask anything about your money…"
             enterKeyHint="send"
@@ -1150,7 +1110,7 @@ Concise under 120 words, UK English, **bold** key figures only.`,
             style={{ flex:1, background:cl.s2, border:`1px solid ${cl.border}`, borderRadius:14, padding:"13px 16px", color:cl.t1, fontSize:16, outline:"none", fontFamily:ff, WebkitAppearance:"none" }}
           />
           <button
-            onMouseDown={e => { e.preventDefault(); sendMsg(); }}
+            onClick={sendMsg}
             style={{ width:48, height:48, borderRadius:14, background: inp.trim()?cl.accent:cl.border, color: inp.trim()?cl.accentFg:cl.t3, border:"none", cursor:"pointer", fontSize:20, flexShrink:0, transition:"background 0.15s" }}
           >→</button>
         </div>
@@ -1166,40 +1126,38 @@ Concise under 120 words, UK English, **bold** key figures only.`,
     { key:"budget", icon:"◈", label:"Budget" },
     { key:"float",  icon:"◇", label:"Float"  },
     { key:"save",   icon:"◎", label:"Save"   },
+    { key:"ask",    icon:"💬", label:"Ask"    },
     { key:"me",     icon:"○", label:"Me"     },
   ];
 
+  const isAsk = tab === "ask";
+
   return (
-    <div style={{ fontFamily:ff, background:cl.bg, color:cl.t1, minHeight:"100vh", maxWidth:430, margin:"0 auto", display:"flex", flexDirection:"column", position:"relative" }}>
-      {/* Wordmark */}
-      <div style={{ position:"fixed", top:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:430, zIndex:10, padding:"12px 20px 0", display:"flex", justifyContent:"center", background:`linear-gradient(to bottom,${cl.bg} 60%,transparent)`, pointerEvents:"none" }}>
-        <span style={{ fontFamily:fs, fontSize:18, fontWeight:600, color:cl.accent, letterSpacing:"0.04em" }}>lucid</span>
-      </div>
+    <div style={{ fontFamily:ff, background:cl.bg, color:cl.t1, height:"100svh", maxWidth:430, margin:"0 auto", display:"flex", flexDirection:"column", overflow:"hidden" }}>
+
+      {/* Wordmark — hide on ask so it doesn't crowd the header */}
+      {!isAsk && (
+        <div style={{ position:"fixed", top:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:430, zIndex:10, padding:"12px 20px 0", display:"flex", justifyContent:"center", background:`linear-gradient(to bottom,${cl.bg} 60%,transparent)`, pointerEvents:"none" }}>
+          <span style={{ fontFamily:fs, fontSize:18, fontWeight:600, color:cl.accent, letterSpacing:"0.04em" }}>lucid</span>
+        </div>
+      )}
 
       {/* Screen */}
-      <div style={{ flex:1, overflowY:"auto", paddingBottom:84 }}>
+      <div style={{ flex:1, overflowY: isAsk ? "hidden" : "auto", paddingBottom: isAsk ? 0 : 84, display: isAsk ? "flex" : "block", flexDirection: isAsk ? "column" : undefined, minHeight:0 }}>
         {tab==="home"   && <HomeScreen />}
         {tab==="budget" && <BudgetScreen />}
         {tab==="float"  && <FloatScreen />}
         {tab==="save"   && <SaveScreen />}
+        {tab==="ask"    && <AskScreen />}
         {tab==="me"     && !showCancel && <MeScreen />}
         {tab==="me"     && showCancel  && <CancelScreen onBack={() => { setShowCancel(false); setMeScreen("overview"); }} />}
       </div>
 
-      {/* FAB */}
-      {!askOpen && (
-        <button onClick={() => setAskOpen(true)} style={{ position:"fixed", bottom:92, right:"calc(50% - 215px + 16px)", width:52, height:52, borderRadius:"50%", background:cl.accent, color:cl.accentFg, border:"none", cursor:"pointer", fontSize:22, zIndex:20, display:"flex", alignItems:"center", justifyContent:"center", boxShadow:`0 4px 20px rgba(100,240,72,0.3)` }}>
-          💬
-        </button>
-      )}
-
-      {askOpen   && <AskOverlay />}
-
-      {/* Bottom nav */}
-      <div style={{ position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:430, background:cl.s1, borderTop:`1px solid ${cl.border}`, display:"flex", padding:"8px 0 18px", zIndex:15 }}>
+      {/* Bottom nav — always visible */}
+      <div style={{ background:cl.s1, borderTop:`1px solid ${cl.border}`, display:"flex", padding:"8px 0 18px", flexShrink:0, zIndex:15 }}>
         {navItems.map(({ key, icon, label }) => (
           <button key={key} onClick={() => { setTab(key); if(key==="me"){ setMeScreen("overview"); setShowCancel(false); } }} style={{ flex:1, background:"none", border:"none", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:3, padding:"5px 0" }}>
-            <span style={{ fontSize:18, opacity: tab===key?1:0.28, transition:"opacity 0.15s" }}>{icon}</span>
+            <span style={{ fontSize: key==="ask" ? 16 : 18, opacity: tab===key?1:0.28, transition:"opacity 0.15s" }}>{icon}</span>
             <span style={{ fontSize:10, color: tab===key?cl.accent:cl.t3, fontWeight: tab===key?600:400, transition:"color 0.15s" }}>{label}</span>
           </button>
         ))}
