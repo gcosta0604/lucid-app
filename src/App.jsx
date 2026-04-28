@@ -1033,90 +1033,106 @@ Concise under 120 words, UK English, **bold** key figures only.`,
   };
 
   // ─────────────────────────────────────────────────────────────────────────
-  // ASK SCREEN — proper tab, not overlay, keyboard-safe
+  // ASK SCREEN — proper tab, keyboard-safe
   // ─────────────────────────────────────────────────────────────────────────
-  const AskScreen = () => {
-    const inputRef = useRef(null);
-    const msgsRef  = useRef(null);
+  const askInputRef = useRef(null);
+  const askMsgsRef  = useRef(null);
 
-    useEffect(() => {
-      // Scroll to bottom when messages change
-      if (msgsRef.current) msgsRef.current.scrollTop = msgsRef.current.scrollHeight;
-    }, [msgs, typing]);
+  // Focus input whenever we switch to ask tab
+  useEffect(() => {
+    if (tab === "ask") {
+      setTimeout(() => askInputRef.current?.focus(), 100);
+    }
+  }, [tab]);
 
-    const Bubble = ({ msg }) => (
-      <div style={{ display:"flex", justifyContent: msg.role==="user"?"flex-end":"flex-start", marginBottom:10, alignItems:"flex-start" }}>
-        {msg.role==="ai" && (
-          <div style={{ width:26, height:26, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, flexShrink:0, marginRight:7, marginTop:2 }}>L</div>
-        )}
-        <div style={{ maxWidth:"78%", background: msg.role==="user"?cl.accent:cl.s2, color: msg.role==="user"?cl.accentFg:cl.t2, borderRadius: msg.role==="user"?"14px 14px 3px 14px":"14px 14px 14px 3px", padding:"10px 13px", fontSize:13, lineHeight:1.55, border: msg.role==="ai"?`1px solid ${cl.border}`:"none" }}>
-          {msg.text.split(/(\*\*[^*]+\*\*)|\n/g).map((p, j) => {
-            if (!p) return null;
-            if (p.startsWith("**")&&p.endsWith("**")) return <strong key={j} style={{ color: msg.role==="user"?cl.accentFg:cl.t1 }}>{p.slice(2,-2)}</strong>;
-            return <span key={j}>{p}</span>;
-          })}
+  // Scroll messages to bottom
+  useEffect(() => {
+    if (tab === "ask" && askMsgsRef.current) {
+      askMsgsRef.current.scrollTop = askMsgsRef.current.scrollHeight;
+    }
+  }, [msgs, typing, tab]);
+
+  const AskBubble = ({ msg }) => (
+    <div style={{ display:"flex", justifyContent: msg.role==="user"?"flex-end":"flex-start", marginBottom:10, alignItems:"flex-start" }}>
+      {msg.role==="ai" && (
+        <div style={{ width:26, height:26, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, flexShrink:0, marginRight:7, marginTop:2 }}>L</div>
+      )}
+      <div style={{ maxWidth:"78%", background: msg.role==="user"?cl.accent:cl.s2, color: msg.role==="user"?cl.accentFg:cl.t2, borderRadius: msg.role==="user"?"14px 14px 3px 14px":"14px 14px 14px 3px", padding:"10px 13px", fontSize:13, lineHeight:1.55, border: msg.role==="ai"?`1px solid ${cl.border}`:"none" }}>
+        {msg.text.split(/(\*\*[^*]+\*\*)|\n/g).map((p, j) => {
+          if (!p) return null;
+          if (p.startsWith("**")&&p.endsWith("**")) return <strong key={j} style={{ color: msg.role==="user"?cl.accentFg:cl.t1 }}>{p.slice(2,-2)}</strong>;
+          return <span key={j}>{p}</span>;
+        })}
+      </div>
+    </div>
+  );
+
+  const AskScreen = () => (
+    <div style={{ display:"flex", flexDirection:"column", height:"100%" }}>
+      {/* Header */}
+      <div
+        style={{ padding:"52px 18px 12px", borderBottom:`1px solid ${cl.border}`, display:"flex", alignItems:"center", gap:10, flexShrink:0 }}
+        onClick={() => askInputRef.current?.focus()}
+      >
+        <div style={{ width:32, height:32, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700 }}>L</div>
+        <div>
+          <p style={{ fontSize:15, fontWeight:600, color:cl.t1, margin:0 }}>Ask Lucid</p>
+          <p style={{ fontSize:11, color:cl.accent, margin:0 }}>● Live AI · your real data</p>
         </div>
       </div>
-    );
 
-    return (
-      <div style={{ display:"flex", flexDirection:"column", height:"100%" }}>
-        {/* Header */}
-        <div style={{ padding:"52px 18px 12px", borderBottom:`1px solid ${cl.border}`, display:"flex", alignItems:"center", gap:10, flexShrink:0 }}>
-          <div style={{ width:32, height:32, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700 }}>L</div>
-          <div>
-            <p style={{ fontSize:15, fontWeight:600, color:cl.t1, margin:0 }}>Ask Lucid</p>
-            <p style={{ fontSize:11, color:cl.accent, margin:0 }}>● Live AI · your real data</p>
-          </div>
+      {/* Quick prompts */}
+      {msgs.length < 2 && (
+        <div style={{ padding:"10px 18px 4px", display:"flex", flexWrap:"wrap", gap:7, flexShrink:0 }}>
+          {["What are your fees?","How's my budget?","Can I get a Float?","How's my credit?"].map(q => (
+            <button key={q}
+              onMouseDown={e => { e.preventDefault(); setInp(q); askInputRef.current?.focus(); }}
+              onTouchEnd={e => { e.preventDefault(); setInp(q); askInputRef.current?.focus(); }}
+              style={{ background:cl.s2, border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:20, padding:"6px 12px", fontSize:12, cursor:"pointer" }}
+            >{q}</button>
+          ))}
         </div>
+      )}
 
-        {/* Quick prompts */}
-        {msgs.length < 2 && (
-          <div style={{ padding:"10px 18px 4px", display:"flex", flexWrap:"wrap", gap:7, flexShrink:0 }}>
-            {["What are your fees?","How's my budget?","Can I get a Float?","How's my credit?"].map(q => (
-              <button key={q} onClick={() => setInp(q)}
-                style={{ background:cl.s2, border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:20, padding:"6px 12px", fontSize:12, cursor:"pointer" }}
-              >{q}</button>
-            ))}
-          </div>
-        )}
-
-        {/* Messages */}
-        <div ref={msgsRef} style={{ flex:1, overflowY:"auto", padding:"12px 18px", WebkitOverflowScrolling:"touch" }}>
-          {msgs.map((msg, i) => <Bubble key={i} msg={msg} />)}
-          {typing && (
-            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
-              <div style={{ width:26, height:26, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700 }}>L</div>
-              <div style={{ background:cl.s2, border:`1px solid ${cl.border}`, borderRadius:"14px 14px 14px 3px", padding:"10px 14px" }}>
-                <span style={{ color:cl.t3, fontSize:18, letterSpacing:3 }}>···</span>
-              </div>
+      {/* Messages — tapping here refocuses input */}
+      <div
+        ref={askMsgsRef}
+        style={{ flex:1, overflowY:"auto", padding:"12px 18px", WebkitOverflowScrolling:"touch" }}
+        onClick={() => askInputRef.current?.focus()}
+      >
+        {msgs.map((msg, i) => <AskBubble key={i} msg={msg} />)}
+        {typing && (
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+            <div style={{ width:26, height:26, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700 }}>L</div>
+            <div style={{ background:cl.s2, border:`1px solid ${cl.border}`, borderRadius:"14px 14px 14px 3px", padding:"10px 14px" }}>
+              <span style={{ color:cl.t3, fontSize:18, letterSpacing:3 }}>···</span>
             </div>
-          )}
-        </div>
-
-        {/* Input bar — sits in normal flow, keyboard pushes it up naturally */}
-        <div style={{ padding:"10px 18px 18px", borderTop:`1px solid ${cl.border}`, background:cl.s1, display:"flex", gap:10, flexShrink:0 }}>
-          <input
-            ref={inputRef}
-            value={inp}
-            onChange={e => setInp(e.target.value)}
-            onKeyDown={e => e.key==="Enter" && sendMsg()}
-            placeholder="Ask anything about your money…"
-            enterKeyHint="send"
-            autoComplete="off"
-            autoCorrect="off"
-            autoCapitalize="sentences"
-            spellCheck={false}
-            style={{ flex:1, background:cl.s2, border:`1px solid ${cl.border}`, borderRadius:14, padding:"13px 16px", color:cl.t1, fontSize:16, outline:"none", fontFamily:ff, WebkitAppearance:"none" }}
-          />
-          <button
-            onClick={sendMsg}
-            style={{ width:48, height:48, borderRadius:14, background: inp.trim()?cl.accent:cl.border, color: inp.trim()?cl.accentFg:cl.t3, border:"none", cursor:"pointer", fontSize:20, flexShrink:0, transition:"background 0.15s" }}
-          >→</button>
-        </div>
+          </div>
+        )}
       </div>
-    );
-  };
+
+      {/* Input */}
+      <div style={{ padding:"10px 18px 18px", borderTop:`1px solid ${cl.border}`, background:cl.s1, display:"flex", gap:10, flexShrink:0 }}>
+        <input
+          ref={askInputRef}
+          value={inp}
+          onChange={e => setInp(e.target.value)}
+          onKeyDown={e => e.key==="Enter" && sendMsg()}
+          placeholder="Ask anything about your money…"
+          enterKeyHint="send"
+          autoComplete="off"
+          autoCorrect="off"
+          autoCapitalize="sentences"
+          spellCheck={false}
+          style={{ flex:1, background:cl.s2, border:`1px solid ${cl.border}`, borderRadius:14, padding:"13px 16px", color:cl.t1, fontSize:16, outline:"none", fontFamily:ff, WebkitAppearance:"none" }}
+        />
+        <button
+          onMouseDown={e => { e.preventDefault(); sendMsg(); askInputRef.current?.focus(); }}
+          style={{ width:48, height:48, borderRadius:14, background: inp.trim()?cl.accent:cl.border, color: inp.trim()?cl.accentFg:cl.t3, border:"none", cursor:"pointer", fontSize:20, flexShrink:0, transition:"background 0.15s" }}
+        >→</button>
+      </div>
+    </div>
+  );
 
   // ─────────────────────────────────────────────────────────────────────────
   // SHELL
