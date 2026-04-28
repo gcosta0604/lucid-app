@@ -1085,7 +1085,11 @@ Concise under 120 words, UK English, **bold** key figures only.`,
 
     return (
       // Full-screen overlay — no flex split that fights the keyboard
-      <div style={{ position:"fixed", inset:0, zIndex:50, background:cl.s1, display:"flex", flexDirection:"column" }}>
+      <div
+        style={{ position:"fixed", inset:0, zIndex:50, background:cl.s1, display:"flex", flexDirection:"column" }}
+        onMouseDown={e => { if (e.target !== inputRef.current) e.preventDefault(); }}
+        onTouchStart={e => { if (e.target !== inputRef.current) e.preventDefault(); }}
+      >
 
         {/* Header */}
         <div style={{ padding:"52px 18px 12px", borderBottom:`1px solid ${cl.border}`, display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0, background:cl.s1 }}>
