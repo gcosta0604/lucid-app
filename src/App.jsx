@@ -396,6 +396,12 @@ export default function LucidApp() {
   const [tab, setTab]           = useState("home");
   const [meScreen, setMeScreen] = useState("overview");
   const [showCancel, setShowCancel] = useState(false);
+  const [realTxns, setRealTxns]     = useState(null); // null = using demo data
+  const [realSummary, setRealSummary] = useState(null);
+  const [importing, setImporting]   = useState(false);
+  const [importError, setImportError] = useState("");
+  const [importDone, setImportDone] = useState(false);
+  const fileInputRef = useRef(null);
   const [msgs, setMsgs] = useState([
     { role:"ai", text:"Hey Gabe 👋 I'm Lucid — your AI finance assistant. I can see your accounts, spending, and credit score. Ask me anything." }
   ]);
@@ -444,10 +450,119 @@ Concise under 120 words, UK English, **bold** key figures only.`,
       });
       const data = await res.json();
       setMsgs(m => [...m, { role:"ai", text: data.content?.[0]?.text || "Sorry, try again." }]);
+      setTimeout(() => { if (askMsgsRef.current) askMsgsRef.current.scrollTop = askMsgsRef.current.scrollHeight; }, 50);
     } catch {
       setMsgs(m => [...m, { role:"ai", text:"Connection issue — try again in a moment." }]);
     }
     setTyping(false);
+  };
+
+  // ── PDF Bank Statement Import ───────────────────────────────────────────
+  const importPDF = async (file) => {
+    setImporting(true);
+    setImportError("");
+    try {
+      // Convert PDF to base64
+      const base64 = await new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result.split(",")[1]);
+        reader.onerror = () => rej(new Error("Failed to read file"));
+        reader.readAsDataURL(file);
+      });
+
+      // Send to Claude to extract and categorise transactions
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4000,
+          messages: [{
+            role: "user",
+            content: [
+              {
+                type: "document",
+                source: { type: "base64", media_type: "application/pdf", data: base64 }
+              },
+              {
+                type: "text",
+                text: `Extract ALL transactions from this bank statement and return ONLY a JSON object, no markdown, no explanation.
+
+Format:
+{
+  "accountName": "bank name from statement",
+  "currency": "GBP",
+  "openingBalance": 0.00,
+  "closingBalance": 0.00,
+  "totalIn": 0.00,
+  "totalOut": 0.00,
+  "period": "e.g. 1 Mar 2026 – 31 Mar 2026",
+  "transactions": [
+    {
+      "date": "DD MMM",
+      "merchant": "cleaned merchant name",
+      "amount": -12.50,
+      "category": "one of: Food & Drink, Groceries, Transport, Bills, Subscriptions, Income, Going out, Self care, Transfers, Other",
+      "icon": "single relevant emoji"
+    }
+  ]
+}
+
+Rules:
+- Debits/spending = negative amounts
+- Credits/income = positive amounts  
+- Clean merchant names (remove reference numbers, card numbers, dates)
+- Categorise accurately based on merchant name
+- Include EVERY transaction, none missing
+- Return valid JSON only`
+              }
+            ]
+          }]
+        })
+      });
+
+      const data = await response.json();
+      const raw = data.content?.[0]?.text || "";
+      const clean = raw.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(clean);
+
+      // Build category summaries from real transactions
+      const catTotals = {};
+      parsed.transactions.forEach(t => {
+        if (t.amount < 0) {
+          const cat = t.category || "Other";
+          catTotals[cat] = (catTotals[cat] || 0) + Math.abs(t.amount);
+        }
+      });
+
+      setRealTxns(parsed.transactions);
+      setRealSummary({
+        accountName: parsed.accountName,
+        period: parsed.period,
+        totalIn: parsed.totalIn,
+        totalOut: parsed.totalOut,
+        closingBalance: parsed.closingBalance,
+        catTotals,
+      });
+
+      // Update Ask Lucid system context with real data
+      const txSummary = Object.entries(catTotals)
+        .sort((a,b) => b[1]-a[1])
+        .map(([k,v]) => `${k}: £${v.toFixed(2)}`)
+        .join(", ");
+
+      setMsgs([{
+        role: "ai",
+        text: `Your real bank statement has been loaded ✅\n\n**${parsed.accountName}** · ${parsed.period}\n\n**Money in:** £${parsed.totalIn?.toFixed(2)}\n**Money out:** £${parsed.totalOut?.toFixed(2)}\n**Closing balance:** £${parsed.closingBalance?.toFixed(2)}\n\nAsk me anything about your actual spending.`
+      }]);
+
+      setImportDone(true);
+      setTab("home");
+
+    } catch (e) {
+      setImportError("Couldn't read this PDF. Make sure it's a bank statement with transaction data, not a scanned image.");
+    }
+    setImporting(false);
   };
 
   // ── Bank connect ────────────────────────────────────────────────────────────
@@ -471,31 +586,135 @@ Concise under 120 words, UK English, **bold** key figures only.`,
   );
 
   // ─────────────────────────────────────────────────────────────────────────
+  // IMPORT SCREEN
+  // ─────────────────────────────────────────────────────────────────────────
+  const ImportScreen = () => (
+    <div style={{ padding:"0 18px" }}>
+      <PageHeader title="Import statement" sub="PDF · stays on your device" backFn={() => setTab("home")} />
+
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/pdf"
+        style={{ display:"none" }}
+        onChange={e => { if (e.target.files[0]) importPDF(e.target.files[0]); }}
+      />
+
+      {/* Privacy card */}
+      <div style={{ ...card({ background:"rgba(100,240,72,0.05)", borderColor:"rgba(100,240,72,0.2)", marginBottom:16 }) }}>
+        <p style={{ fontSize:13, fontWeight:600, color:cl.accent, margin:"0 0 6px" }}>🔒 Your data stays private</p>
+        <p style={{ fontSize:12, color:cl.t2, margin:0, lineHeight:1.6 }}>
+          Your PDF is read directly in your browser. It's sent to Claude AI to extract transactions, then immediately discarded — never stored on any server. No one at Lucid can see it.
+        </p>
+      </div>
+
+      {/* What works */}
+      <div style={{ ...card({ marginBottom:16 }) }}>
+        <p style={{ fontSize:13, fontWeight:600, color:cl.t1, margin:"0 0 10px" }}>Works with any UK bank PDF statement:</p>
+        {["Monzo", "Barclays", "HSBC", "Lloyds", "NatWest", "Starling", "Santander", "Halifax", "Nationwide"].map((b, i) => (
+          <div key={b} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom: i < 8 ? `1px solid ${cl.border}` : "none" }}>
+            <span style={{ color:cl.accent, fontSize:12 }}>✓</span>
+            <span style={{ fontSize:13, color:cl.t2 }}>{b}</span>
+          </div>
+        ))}
+        <p style={{ fontSize:11, color:cl.t3, margin:"10px 0 0" }}>Must be a digital PDF, not a scanned image.</p>
+      </div>
+
+      {/* Import button or loading */}
+      {importing ? (
+        <div style={{ ...card({ textAlign:"center", padding:"32px 20px", marginBottom:16 }) }}>
+          <div style={{ fontSize:36, marginBottom:12 }}>📄</div>
+          <p style={{ fontSize:15, color:cl.t1, fontWeight:500, margin:"0 0 6px" }}>Reading your statement…</p>
+          <p style={{ fontSize:12, color:cl.t3, margin:"0 0 16px" }}>Claude is extracting and categorising your transactions</p>
+          <div style={{ height:4, background:cl.border, borderRadius:4, overflow:"hidden" }}>
+            <div style={{ height:"100%", width:"60%", background:cl.accent, borderRadius:4, animation:"pulse 1.5s ease infinite" }} />
+          </div>
+        </div>
+      ) : (
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          style={{ width:"100%", background:cl.accent, color:cl.accentFg, border:"none", borderRadius:14, padding:18, fontSize:16, fontWeight:600, cursor:"pointer", marginBottom:12, display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}
+        >
+          <span style={{ fontSize:20 }}>📄</span> Choose PDF statement
+        </button>
+      )}
+
+      {importError && (
+        <div style={{ ...card({ background:"rgba(242,101,80,0.08)", borderColor:"rgba(242,101,80,0.25)", marginBottom:16 }) }}>
+          <p style={{ fontSize:13, color:cl.red, margin:0 }}>⚠️ {importError}</p>
+        </div>
+      )}
+
+      {realSummary && (
+        <div style={{ ...card({ background:"rgba(100,240,72,0.06)", borderColor:"rgba(100,240,72,0.2)", marginBottom:16 }) }}>
+          <p style={{ fontSize:13, fontWeight:600, color:cl.accent, margin:"0 0 8px" }}>✅ {realSummary.accountName} loaded</p>
+          <p style={{ fontSize:12, color:cl.t2, margin:"0 0 4px" }}>{realSummary.period}</p>
+          <p style={{ fontSize:12, color:cl.t3, margin:0 }}>
+            {realTxns?.length} transactions imported
+          </p>
+        </div>
+      )}
+
+      {realSummary && (
+        <button
+          onClick={() => { setRealTxns(null); setRealSummary(null); setImportDone(false); }}
+          style={{ width:"100%", background:"none", border:`1px solid ${cl.red}`, color:cl.red, borderRadius:14, padding:14, fontSize:14, cursor:"pointer", marginBottom:24 }}
+        >
+          Clear & return to demo data
+        </button>
+      )}
+    </div>
+  );
+
+  // helper — which transactions to show
+  const activeTxns = realTxns || txns;
+
+  // ─────────────────────────────────────────────────────────────────────────
   // HOME — now shows Float eligibility pre-paywall
   // ─────────────────────────────────────────────────────────────────────────
-  const HomeScreen = () => (
+  const HomeScreen = () => {
+    const balance = realSummary ? realSummary.closingBalance : 677.83;
+    const totalIn = realSummary ? realSummary.totalIn : 1850;
+    const totalOut = realSummary ? realSummary.totalOut : 1102.17;
+    const left = totalIn - totalOut;
+    const period = realSummary ? realSummary.period : "18 Apr → 26 Apr";
+
+    return (
     <div style={{ padding:"0 18px" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"50px 0 20px" }}>
         <div>
           <p style={{ fontSize:12, color:cl.t3, margin:"0 0 2px" }}>Good morning,</p>
           <h1 style={{ fontFamily:fs, fontSize:30, fontWeight:600, color:cl.t1, margin:0 }}>Gabe</h1>
         </div>
-        <button onClick={() => setTab("me")} style={{ width:40, height:40, borderRadius:"50%", background:cl.s2, border:`1px solid ${cl.border}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, cursor:"pointer" }}>🌿</button>
+        <div style={{ display:"flex", gap:8 }}>
+          <button onClick={() => setTab("import")} style={{ height:40, borderRadius:20, background:cl.s2, border:`1px solid ${cl.border}`, display:"flex", alignItems:"center", gap:6, padding:"0 14px", cursor:"pointer" }}>
+            <span style={{ fontSize:14 }}>📄</span>
+            <span style={{ fontSize:11, color: realSummary ? cl.accent : cl.t2 }}>{realSummary ? "Real data" : "Import"}</span>
+          </button>
+          <button onClick={() => setTab("me")} style={{ width:40, height:40, borderRadius:"50%", background:cl.s2, border:`1px solid ${cl.border}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, cursor:"pointer" }}>🌿</button>
+        </div>
       </div>
 
       {/* Balance */}
       <div style={{ ...gradCard({ padding:"22px", marginBottom:14, position:"relative", overflow:"hidden" }) }}>
         <div style={{ position:"absolute", top:-20, right:-20, width:100, height:100, borderRadius:"50%", background:"rgba(100,240,72,0.05)" }} />
-        <p style={{ fontSize:11, color:cl.t3, letterSpacing:"0.07em", textTransform:"uppercase", margin:"0 0 5px" }}>Total balance</p>
-        <h2 style={{ fontFamily:fs, fontSize:44, fontWeight:600, color:cl.t1, margin:"0 0 4px", lineHeight:1 }}>£677<span style={{ fontSize:22, color:cl.t2 }}>.83</span></h2>
-        <p style={{ fontSize:12, color:cl.t3, margin:"0 0 14px" }}>{connectedBanks.length} accounts · Open Banking</p>
+        <p style={{ fontSize:11, color:cl.t3, letterSpacing:"0.07em", textTransform:"uppercase", margin:"0 0 5px" }}>
+          {realSummary ? realSummary.accountName : "Total balance"}
+        </p>
+        <h2 style={{ fontFamily:fs, fontSize:44, fontWeight:600, color:cl.t1, margin:"0 0 4px", lineHeight:1 }}>
+          £{Math.floor(balance)}<span style={{ fontSize:22, color:cl.t2 }}>.{String(Math.round((balance % 1) * 100)).padStart(2,"0")}</span>
+        </h2>
+        <p style={{ fontSize:12, color:cl.t3, margin:"0 0 14px" }}>
+          {realSummary ? `${realTxns?.length} transactions · ${period}` : `${connectedBanks.length} accounts · Open Banking`}
+        </p>
         <div style={{ background:"rgba(255,255,255,0.05)", borderRadius:10, padding:"10px 12px" }}>
           <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
-            <span style={{ fontSize:11, color:cl.t3 }}>Pay cycle 18 Apr → 26 Apr</span>
-            <span style={{ fontSize:11, color:cl.accent, fontWeight:600 }}>9 days left</span>
+            <span style={{ fontSize:11, color:cl.t3 }}>{period}</span>
+            <span style={{ fontSize:11, color:cl.accent, fontWeight:600 }}>£{left.toFixed(0)} left</span>
           </div>
           <div style={{ height:4, background:"rgba(255,255,255,0.07)", borderRadius:4, overflow:"hidden" }}>
-            <div style={{ height:"100%", width:"46%", background:cl.accent, borderRadius:4 }} />
+            <div style={{ height:"100%", width:`${Math.min((totalOut/totalIn)*100,100)}%`, background:cl.accent, borderRadius:4 }} />
           </div>
         </div>
       </div>
@@ -542,11 +761,11 @@ Concise under 120 words, UK English, **bold** key figures only.`,
 
       {/* Spend ring */}
       <div style={{ ...card({ display:"flex", alignItems:"center", gap:14, marginBottom:14 }) }}>
-        <SpendRing spent={1102.17} total={1850} />
+        <SpendRing spent={totalOut} total={totalIn} />
         <div>
-          <p style={{ fontSize:11, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.05em", margin:"0 0 3px" }}>This cycle</p>
-          <p style={{ fontSize:20, fontWeight:600, color:cl.t1, margin:"0 0 2px" }}>£1,102 <span style={{ fontSize:12, color:cl.t3 }}>spent</span></p>
-          <p style={{ fontSize:14, color:cl.accent, margin:"0 0 7px" }}>£748 remaining</p>
+          <p style={{ fontSize:11, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.05em", margin:"0 0 3px" }}>This period</p>
+          <p style={{ fontSize:20, fontWeight:600, color:cl.t1, margin:"0 0 2px" }}>£{totalOut.toFixed(0)} <span style={{ fontSize:12, color:cl.t3 }}>spent</span></p>
+          <p style={{ fontSize:14, color:cl.accent, margin:"0 0 7px" }}>£{left.toFixed(0)} remaining</p>
           <button onClick={() => setTab("budget")} style={{ fontSize:12, color:cl.t3, background:"none", border:`1px solid ${cl.border}`, borderRadius:8, padding:"4px 10px", cursor:"pointer" }}>Full breakdown →</button>
         </div>
       </div>
@@ -554,21 +773,24 @@ Concise under 120 words, UK English, **bold** key figures only.`,
       {/* Recent */}
       <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>Recent</h3>
       <div style={{ ...card(), marginBottom:24 }}>
-        {txns.slice(0,5).map((t, i) => (
+        {activeTxns.slice(0,5).map((t, i) => (
           <div key={i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"10px 0", borderBottom: i < 4 ? `1px solid ${cl.border}` : "none" }}>
             <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-              <div style={{ width:34, height:34, borderRadius:9, background:cl.s1, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15 }}>{t.i}</div>
+              <div style={{ width:34, height:34, borderRadius:9, background:cl.s1, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15 }}>{t.i || t.icon || "💳"}</div>
               <div>
-                <p style={{ fontSize:13, color:cl.t1, fontWeight:500, margin:0 }}>{t.m}</p>
-                <p style={{ fontSize:11, color:cl.t3, margin:0 }}>{t.cat} · {t.d}</p>
+                <p style={{ fontSize:13, color:cl.t1, fontWeight:500, margin:0 }}>{t.m || t.merchant}</p>
+                <p style={{ fontSize:11, color:cl.t3, margin:0 }}>{t.cat || t.category} · {t.d || t.date}</p>
               </div>
             </div>
-            <span style={{ fontSize:13, fontWeight:600, color:t.a > 0 ? cl.accent : cl.t1 }}>{t.a > 0 ? "+" : ""}£{Math.abs(t.a).toFixed(2)}</span>
+            <span style={{ fontSize:13, fontWeight:600, color:t.a > 0 || t.amount > 0 ? cl.accent : cl.t1 }}>
+              {(t.a || t.amount) > 0 ? "+" : ""}£{Math.abs(t.a || t.amount).toFixed(2)}
+            </span>
           </div>
         ))}
       </div>
     </div>
-  );
+    );
+  };
 
   // ─────────────────────────────────────────────────────────────────────────
   // BUDGET
@@ -1038,101 +1260,30 @@ Concise under 120 words, UK English, **bold** key figures only.`,
   const askInputRef = useRef(null);
   const askMsgsRef  = useRef(null);
 
-  // Focus input whenever we switch to ask tab
+  const appRef = useRef(null);
+
+  // Fix iOS Safari keyboard — visualViewport resizes when keyboard opens
   useEffect(() => {
-    if (tab === "ask") {
-      setTimeout(() => askInputRef.current?.focus(), 100);
-    }
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const handler = () => {
+      if (appRef.current) {
+        appRef.current.style.height = `${vv.height}px`;
+      }
+    };
+    vv.addEventListener("resize", handler);
+    vv.addEventListener("scroll", handler);
+    handler();
+    return () => {
+      vv.removeEventListener("resize", handler);
+      vv.removeEventListener("scroll", handler);
+    };
+  }, []);
+
+  // Focus input when switching to ask tab
+  useEffect(() => {
+    if (tab === "ask") setTimeout(() => askInputRef.current?.focus(), 100);
   }, [tab]);
-
-  // Scroll messages to bottom
-  useEffect(() => {
-    if (tab === "ask" && askMsgsRef.current) {
-      askMsgsRef.current.scrollTop = askMsgsRef.current.scrollHeight;
-    }
-  }, [msgs, typing, tab]);
-
-  const AskBubble = ({ msg }) => (
-    <div style={{ display:"flex", justifyContent: msg.role==="user"?"flex-end":"flex-start", marginBottom:10, alignItems:"flex-start" }}>
-      {msg.role==="ai" && (
-        <div style={{ width:26, height:26, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, flexShrink:0, marginRight:7, marginTop:2 }}>L</div>
-      )}
-      <div style={{ maxWidth:"78%", background: msg.role==="user"?cl.accent:cl.s2, color: msg.role==="user"?cl.accentFg:cl.t2, borderRadius: msg.role==="user"?"14px 14px 3px 14px":"14px 14px 14px 3px", padding:"10px 13px", fontSize:13, lineHeight:1.55, border: msg.role==="ai"?`1px solid ${cl.border}`:"none" }}>
-        {msg.text.split(/(\*\*[^*]+\*\*)|\n/g).map((p, j) => {
-          if (!p) return null;
-          if (p.startsWith("**")&&p.endsWith("**")) return <strong key={j} style={{ color: msg.role==="user"?cl.accentFg:cl.t1 }}>{p.slice(2,-2)}</strong>;
-          return <span key={j}>{p}</span>;
-        })}
-      </div>
-    </div>
-  );
-
-  const AskScreen = () => (
-    <div style={{ display:"flex", flexDirection:"column", height:"100%" }}>
-      {/* Header */}
-      <div
-        style={{ padding:"52px 18px 12px", borderBottom:`1px solid ${cl.border}`, display:"flex", alignItems:"center", gap:10, flexShrink:0 }}
-        onClick={() => askInputRef.current?.focus()}
-      >
-        <div style={{ width:32, height:32, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700 }}>L</div>
-        <div>
-          <p style={{ fontSize:15, fontWeight:600, color:cl.t1, margin:0 }}>Ask Lucid</p>
-          <p style={{ fontSize:11, color:cl.accent, margin:0 }}>● Live AI · your real data</p>
-        </div>
-      </div>
-
-      {/* Quick prompts */}
-      {msgs.length < 2 && (
-        <div style={{ padding:"10px 18px 4px", display:"flex", flexWrap:"wrap", gap:7, flexShrink:0 }}>
-          {["What are your fees?","How's my budget?","Can I get a Float?","How's my credit?"].map(q => (
-            <button key={q}
-              onMouseDown={e => { e.preventDefault(); setInp(q); askInputRef.current?.focus(); }}
-              onTouchEnd={e => { e.preventDefault(); setInp(q); askInputRef.current?.focus(); }}
-              style={{ background:cl.s2, border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:20, padding:"6px 12px", fontSize:12, cursor:"pointer" }}
-            >{q}</button>
-          ))}
-        </div>
-      )}
-
-      {/* Messages — tapping here refocuses input */}
-      <div
-        ref={askMsgsRef}
-        style={{ flex:1, overflowY:"auto", padding:"12px 18px", WebkitOverflowScrolling:"touch" }}
-        onClick={() => askInputRef.current?.focus()}
-      >
-        {msgs.map((msg, i) => <AskBubble key={i} msg={msg} />)}
-        {typing && (
-          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
-            <div style={{ width:26, height:26, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700 }}>L</div>
-            <div style={{ background:cl.s2, border:`1px solid ${cl.border}`, borderRadius:"14px 14px 14px 3px", padding:"10px 14px" }}>
-              <span style={{ color:cl.t3, fontSize:18, letterSpacing:3 }}>···</span>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Input */}
-      <div style={{ padding:"10px 18px 18px", borderTop:`1px solid ${cl.border}`, background:cl.s1, display:"flex", gap:10, flexShrink:0 }}>
-        <input
-          ref={askInputRef}
-          value={inp}
-          onChange={e => setInp(e.target.value)}
-          onKeyDown={e => e.key==="Enter" && sendMsg()}
-          placeholder="Ask anything about your money…"
-          enterKeyHint="send"
-          autoComplete="off"
-          autoCorrect="off"
-          autoCapitalize="sentences"
-          spellCheck={false}
-          style={{ flex:1, background:cl.s2, border:`1px solid ${cl.border}`, borderRadius:14, padding:"13px 16px", color:cl.t1, fontSize:16, outline:"none", fontFamily:ff, WebkitAppearance:"none" }}
-        />
-        <button
-          onMouseDown={e => { e.preventDefault(); sendMsg(); askInputRef.current?.focus(); }}
-          style={{ width:48, height:48, borderRadius:14, background: inp.trim()?cl.accent:cl.border, color: inp.trim()?cl.accentFg:cl.t3, border:"none", cursor:"pointer", fontSize:20, flexShrink:0, transition:"background 0.15s" }}
-        >→</button>
-      </div>
-    </div>
-  );
 
   // ─────────────────────────────────────────────────────────────────────────
   // SHELL
@@ -1149,31 +1300,105 @@ Concise under 120 words, UK English, **bold** key figures only.`,
   const isAsk = tab === "ask";
 
   return (
-    <div style={{ fontFamily:ff, background:cl.bg, color:cl.t1, height:"100svh", maxWidth:430, margin:"0 auto", display:"flex", flexDirection:"column", overflow:"hidden" }}>
+    <div ref={appRef} style={{ fontFamily:ff, background:cl.bg, color:cl.t1, height:"100svh", maxWidth:430, margin:"0 auto", display:"flex", flexDirection:"column", overflow:"hidden" }}>
 
-      {/* Wordmark — hide on ask so it doesn't crowd the header */}
+      {/* Wordmark */}
       {!isAsk && (
         <div style={{ position:"fixed", top:0, left:"50%", transform:"translateX(-50%)", width:"100%", maxWidth:430, zIndex:10, padding:"12px 20px 0", display:"flex", justifyContent:"center", background:`linear-gradient(to bottom,${cl.bg} 60%,transparent)`, pointerEvents:"none" }}>
           <span style={{ fontFamily:fs, fontSize:18, fontWeight:600, color:cl.accent, letterSpacing:"0.04em" }}>lucid</span>
         </div>
       )}
 
-      {/* Screen */}
-      <div style={{ flex:1, overflowY: isAsk ? "hidden" : "auto", paddingBottom: isAsk ? 0 : 84, display: isAsk ? "flex" : "block", flexDirection: isAsk ? "column" : undefined, minHeight:0 }}>
+      {/* ── All normal screens ── */}
+      <div style={{ flex:1, overflowY:"auto", paddingBottom:84, display: isAsk ? "none" : "block" }}>
         {tab==="home"   && <HomeScreen />}
         {tab==="budget" && <BudgetScreen />}
         {tab==="float"  && <FloatScreen />}
         {tab==="save"   && <SaveScreen />}
-        {tab==="ask"    && <AskScreen />}
+        {tab==="import" && <ImportScreen />}
         {tab==="me"     && !showCancel && <MeScreen />}
         {tab==="me"     && showCancel  && <CancelScreen onBack={() => { setShowCancel(false); setMeScreen("overview"); }} />}
       </div>
 
-      {/* Bottom nav — always visible */}
+      {/* ── Ask screen — ALWAYS mounted, hidden with CSS only ── */}
+      <div style={{ flex:1, display: isAsk ? "block" : "none", overflowY:"auto", WebkitOverflowScrolling:"touch", position:"relative" }}>
+
+        {/* Header */}
+        <div style={{ padding:"52px 18px 12px", borderBottom:`1px solid ${cl.border}`, display:"flex", alignItems:"center", gap:10, background:cl.bg, position:"sticky", top:0, zIndex:2 }}>
+          <div style={{ width:32, height:32, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:700 }}>L</div>
+          <div>
+            <p style={{ fontSize:15, fontWeight:600, color:cl.t1, margin:0 }}>Ask Lucid</p>
+            <p style={{ fontSize:11, color:cl.accent, margin:0 }}>● Live AI · your real data</p>
+          </div>
+        </div>
+
+        {/* Quick prompts */}
+        {msgs.length < 2 && (
+          <div style={{ padding:"10px 18px 4px", display:"flex", flexWrap:"wrap", gap:7 }}>
+            {["What are your fees?","How's my budget?","Can I get a Float?","How's my credit?"].map(q => (
+              <button key={q}
+                onMouseDown={e => { e.preventDefault(); setInp(q); }}
+                onTouchEnd={e => { e.preventDefault(); setInp(q); askInputRef.current?.focus(); }}
+                style={{ background:cl.s2, border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:20, padding:"6px 12px", fontSize:12, cursor:"pointer" }}
+              >{q}</button>
+            ))}
+          </div>
+        )}
+
+        {/* Messages */}
+        <div ref={askMsgsRef} style={{ padding:"12px 18px 120px" }}>
+          {msgs.map((msg, i) => (
+            <div key={i} style={{ display:"flex", justifyContent: msg.role==="user"?"flex-end":"flex-start", marginBottom:10, alignItems:"flex-start" }}>
+              {msg.role==="ai" && (
+                <div style={{ width:26, height:26, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, flexShrink:0, marginRight:7, marginTop:2 }}>L</div>
+              )}
+              <div style={{ maxWidth:"78%", background: msg.role==="user"?cl.accent:cl.s2, color: msg.role==="user"?cl.accentFg:cl.t2, borderRadius: msg.role==="user"?"14px 14px 3px 14px":"14px 14px 14px 3px", padding:"10px 13px", fontSize:13, lineHeight:1.55, border: msg.role==="ai"?`1px solid ${cl.border}`:"none" }}>
+                {msg.text.split(/(\*\*[^*]+\*\*)|\n/g).map((p, j) => {
+                  if (!p) return null;
+                  if (p.startsWith("**")&&p.endsWith("**")) return <strong key={j} style={{ color: msg.role==="user"?cl.accentFg:cl.t1 }}>{p.slice(2,-2)}</strong>;
+                  return <span key={j}>{p}</span>;
+                })}
+              </div>
+            </div>
+          ))}
+          {typing && (
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+              <div style={{ width:26, height:26, borderRadius:"50%", background:cl.accent, color:cl.accentFg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700 }}>L</div>
+              <div style={{ background:cl.s2, border:`1px solid ${cl.border}`, borderRadius:"14px 14px 14px 3px", padding:"10px 14px" }}>
+                <span style={{ color:cl.t3, fontSize:18, letterSpacing:3 }}>···</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Input — sticky bottom, keyboard pushes page up naturally */}
+        <div style={{ position:"sticky", bottom:0, padding:"10px 18px 18px", borderTop:`1px solid ${cl.border}`, background:cl.s1, display:"flex", gap:10 }}>
+          <input
+            ref={askInputRef}
+            value={inp}
+            onChange={e => setInp(e.target.value)}
+            onKeyDown={e => e.key==="Enter" && sendMsg()}
+            onFocus={() => setTimeout(() => { if(askMsgsRef.current) askMsgsRef.current.scrollTop = askMsgsRef.current.scrollHeight; }, 400)}
+            placeholder="Ask anything about your money…"
+            enterKeyHint="send"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="sentences"
+            spellCheck={false}
+            style={{ flex:1, background:cl.s2, border:`1px solid ${cl.border}`, borderRadius:14, padding:"13px 16px", color:cl.t1, fontSize:16, outline:"none", fontFamily:ff, WebkitAppearance:"none" }}
+          />
+          <button
+            onMouseDown={e => { e.preventDefault(); sendMsg(); }}
+            style={{ width:48, height:48, borderRadius:14, background: inp.trim()?cl.accent:cl.border, color: inp.trim()?cl.accentFg:cl.t3, border:"none", cursor:"pointer", fontSize:20, flexShrink:0, transition:"background 0.15s" }}
+          >→</button>
+        </div>
+      </div>
+
+      {/* Bottom nav */}
       <div style={{ background:cl.s1, borderTop:`1px solid ${cl.border}`, display:"flex", padding:"8px 0 18px", flexShrink:0, zIndex:15 }}>
         {navItems.map(({ key, icon, label }) => (
           <button key={key} onClick={() => { setTab(key); if(key==="me"){ setMeScreen("overview"); setShowCancel(false); } }} style={{ flex:1, background:"none", border:"none", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:3, padding:"5px 0" }}>
-            <span style={{ fontSize: key==="ask" ? 16 : 18, opacity: tab===key?1:0.28, transition:"opacity 0.15s" }}>{icon}</span>
+            <span style={{ fontSize: key==="ask"?16:18, opacity: tab===key?1:0.28, transition:"opacity 0.15s" }}>{icon}</span>
             <span style={{ fontSize:10, color: tab===key?cl.accent:cl.t3, fontWeight: tab===key?600:400, transition:"color 0.15s" }}>{label}</span>
           </button>
         ))}
