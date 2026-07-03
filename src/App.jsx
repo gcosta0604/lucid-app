@@ -458,106 +458,98 @@ Concise under 120 words, UK English, **bold** key figures only.`,
   };
 
   // ── Multi-format Bank Statement Import ─────────────────────────────────────
+  const toBase64 = (file) => new Promise((res, rej) => {
+    const reader = new FileReader();
+    reader.onload = () => res(reader.result.split(",")[1]);
+    reader.onerror = () => rej(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
+  });
+
   const importStatement = async (file) => {
     setImporting(true);
     setImportError("");
 
     const ext = file.name.split(".").pop().toLowerCase();
+    const isCSV  = ext === "csv" || ext === "txt";
     const isPDF  = ext === "pdf";
-    const isCSV  = ext === "csv";
-    const isTXT  = ext === "txt";
     const isXLSX = ext === "xlsx" || ext === "xls";
     const isDOCX = ext === "docx" || ext === "doc";
-    const isText = isCSV || isTXT;
+
+    const extractionPrompt = `Extract ALL transactions from this bank statement. Return ONLY valid JSON with no markdown, no explanation, no code fences:
+{"accountName":"bank name","openingBalance":0.00,"closingBalance":0.00,"totalIn":0.00,"totalOut":0.00,"period":"DD MMM – DD MMM YYYY","transactions":[{"date":"DD MMM","merchant":"clean name","amount":-12.50,"category":"Food & Drink","icon":"🍽️"}]}
+Categories: Food & Drink, Groceries, Transport, Bills, Subscriptions, Income, Going out, Self care, Transfers, Other. Debits=negative, credits=positive. Clean merchant names. Include every transaction.`;
 
     try {
-      let messageContent = [];
+      let content = [];
 
-      if (isText) {
-        // CSV / TXT — read as plain text, send as text block
-        const text = await new Promise((res, rej) => {
-          const reader = new FileReader();
-          reader.onload = () => res(reader.result);
-          reader.onerror = () => rej(new Error("Failed to read file"));
-          reader.readAsText(file);
-        });
-        messageContent = [
-          { type: "text", text: `Here is a bank statement in ${ext.toUpperCase()} format:\n\n${text}\n\nExtract ALL transactions and return ONLY JSON as specified.` }
+      if (isCSV) {
+        const text = await file.text();
+        const truncated = text.slice(0, 12000);
+        content = [{ type:"text", text:`Bank statement CSV:\n\n${truncated}\n\n${extractionPrompt}` }];
+
+      } else if (isPDF) {
+        const b64 = await toBase64(file);
+        content = [
+          { type:"document", source:{ type:"base64", media_type:"application/pdf", data:b64 } },
+          { type:"text", text: extractionPrompt }
         ];
-      } else {
-        // PDF / XLSX / DOCX — read as base64 document
-        const base64 = await new Promise((res, rej) => {
-          const reader = new FileReader();
-          reader.onload = () => res(reader.result.split(",")[1]);
-          reader.onerror = () => rej(new Error("Failed to read file"));
-          reader.readAsDataURL(file);
-        });
 
-        const mediaType = isPDF  ? "application/pdf"
-          : isXLSX ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          : isDOCX ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-          : "application/pdf";
-
-        messageContent = [
-          {
-            type: "document",
-            source: { type: "base64", media_type: mediaType, data: base64 }
-          },
-          { type: "text", text: "Extract ALL transactions from this bank statement and return ONLY JSON as specified below." }
+      } else if (isXLSX) {
+        const b64 = await toBase64(file);
+        content = [
+          { type:"document", source:{ type:"base64", media_type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", data:b64 } },
+          { type:"text", text: extractionPrompt }
         ];
-      }
 
-      // Shared extraction prompt appended to all formats
-      const extractionPrompt = `
-Return ONLY a valid JSON object with no markdown, no explanation:
-{
-  "accountName": "bank name",
-  "currency": "GBP",
-  "openingBalance": 0.00,
-  "closingBalance": 0.00,
-  "totalIn": 0.00,
-  "totalOut": 0.00,
-  "period": "e.g. 1 Mar 2026 – 31 Mar 2026",
-  "transactions": [
-    {
-      "date": "DD MMM",
-      "merchant": "cleaned merchant name",
-      "amount": -12.50,
-      "category": "one of: Food & Drink, Groceries, Transport, Bills, Subscriptions, Income, Going out, Self care, Transfers, Other",
-      "icon": "single emoji"
-    }
-  ]
-}
-Rules:
-- Debits = negative, credits = positive
-- Clean merchant names (strip reference numbers, dates)
-- Categorise accurately by merchant name
-- Include EVERY transaction, none missing
-- Return valid JSON only`;
+      } else if (isDOCX) {
+        const b64 = await toBase64(file);
+        content = [
+          { type:"document", source:{ type:"base64", media_type:"application/vnd.openxmlformats-officedocument.wordprocessingml.document", data:b64 } },
+          { type:"text", text: extractionPrompt }
+        ];
 
-      // Add extraction prompt to the last text block or append new one
-      if (isText) {
-        messageContent[0].text += extractionPrompt;
       } else {
-        messageContent[messageContent.length - 1].text += extractionPrompt;
+        throw new Error(`Unsupported format .${ext} — use PDF, CSV, XLSX or DOCX`);
       }
 
       const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 4000,
-          messages: [{ role: "user", content: messageContent }]
+          model:"claude-sonnet-4-20250514",
+          max_tokens:4000,
+          messages:[{ role:"user", content }]
         })
       });
 
-      const data = await response.json();
-      const raw  = data.content?.[0]?.text || "";
-      const clean = raw.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean);
+      if (!response.ok) {
+        const err = await response.text();
+        console.error("Anthropic API error:", response.status, err);
+        throw new Error(`API returned ${response.status} — check console for details`);
+      }
 
-      // Build category totals
+      const data = await response.json();
+      console.log("Anthropic response:", JSON.stringify(data, null, 2));
+
+      if (data.error) throw new Error(data.error.message);
+      if (!data.content?.[0]?.text) throw new Error("Empty response from API");
+
+      const raw = data.content[0].text;
+      // Strip any accidental markdown fences
+      const jsonStr = raw.replace(/```json\n?/gi,"").replace(/```\n?/g,"").trim();
+
+      let parsed;
+      try {
+        parsed = JSON.parse(jsonStr);
+      } catch {
+        console.error("JSON parse error. Raw text was:", jsonStr);
+        throw new Error("Could not parse the response. Open browser console (F12) and share what you see — I can fix it.");
+      }
+
+      if (!Array.isArray(parsed.transactions) || parsed.transactions.length === 0) {
+        throw new Error("No transactions found. Make sure this file is a bank statement with transaction rows.");
+      }
+
       const catTotals = {};
       parsed.transactions.forEach(t => {
         if (t.amount < 0) {
@@ -566,32 +558,31 @@ Rules:
         }
       });
 
+      const totalIn  = parsed.totalIn  || parsed.transactions.filter(t=>t.amount>0).reduce((s,t)=>s+t.amount,0);
+      const totalOut = parsed.totalOut || parsed.transactions.filter(t=>t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
+
       setRealTxns(parsed.transactions);
       setRealSummary({
-        accountName: parsed.accountName,
-        period: parsed.period,
-        totalIn: parsed.totalIn,
-        totalOut: parsed.totalOut,
-        closingBalance: parsed.closingBalance,
+        accountName: parsed.accountName || "Your bank",
+        period: parsed.period || "Imported",
+        totalIn, totalOut,
+        closingBalance: parsed.closingBalance || 0,
         catTotals,
         fileType: ext.toUpperCase(),
       });
 
-      const txSummary = Object.entries(catTotals)
-        .sort((a,b) => b[1]-a[1])
-        .map(([k,v]) => `${k}: £${v.toFixed(2)}`)
-        .join(", ");
+      const topSpend = Object.entries(catTotals)
+        .sort((a,b)=>b[1]-a[1]).slice(0,3)
+        .map(([k,v])=>`${k} £${v.toFixed(0)}`).join(" · ");
 
-      setMsgs([{
-        role: "ai",
-        text: `Your real bank statement has been loaded ✅\n\n**${parsed.accountName}** · ${parsed.period}\n\n**Money in:** £${parsed.totalIn?.toFixed(2)}\n**Money out:** £${parsed.totalOut?.toFixed(2)}\n**Closing balance:** £${parsed.closingBalance?.toFixed(2)}\n\nTop spending: ${txSummary}\n\nAsk me anything about your actual spending.`
-      }]);
+      setMsgs([{ role:"ai", text:`Statement loaded ✅\n\n**${parsed.accountName || "Your bank"}** · ${parsed.period || ""}\n\n**In:** £${totalIn.toFixed(2)} · **Out:** £${totalOut.toFixed(2)}\n**Top spend:** ${topSpend}\n\nAsk me anything about your real spending.` }]);
 
       setImportDone(true);
       setTab("home");
 
-    } catch (e) {
-      setImportError(`Couldn't read this ${ext.toUpperCase()} file. Make sure it contains transaction data and isn't password protected or a scanned image.`);
+    } catch(e) {
+      console.error("Import error:", e);
+      setImportError(e.message || `Could not read this ${ext.toUpperCase()}. Try exporting as CSV from your bank app — it's the most reliable format.`);
     }
     setImporting(false);
   };
