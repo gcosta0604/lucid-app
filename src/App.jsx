@@ -457,40 +457,61 @@ Concise under 120 words, UK English, **bold** key figures only.`,
     setTyping(false);
   };
 
-  // ── PDF Bank Statement Import ───────────────────────────────────────────
-  const importPDF = async (file) => {
+  // ── Multi-format Bank Statement Import ─────────────────────────────────────
+  const importStatement = async (file) => {
     setImporting(true);
     setImportError("");
+
+    const ext = file.name.split(".").pop().toLowerCase();
+    const isPDF  = ext === "pdf";
+    const isCSV  = ext === "csv";
+    const isTXT  = ext === "txt";
+    const isXLSX = ext === "xlsx" || ext === "xls";
+    const isDOCX = ext === "docx" || ext === "doc";
+    const isText = isCSV || isTXT;
+
     try {
-      // Convert PDF to base64
-      const base64 = await new Promise((res, rej) => {
-        const reader = new FileReader();
-        reader.onload = () => res(reader.result.split(",")[1]);
-        reader.onerror = () => rej(new Error("Failed to read file"));
-        reader.readAsDataURL(file);
-      });
+      let messageContent = [];
 
-      // Send to Claude to extract and categorise transactions
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 4000,
-          messages: [{
-            role: "user",
-            content: [
-              {
-                type: "document",
-                source: { type: "base64", media_type: "application/pdf", data: base64 }
-              },
-              {
-                type: "text",
-                text: `Extract ALL transactions from this bank statement and return ONLY a JSON object, no markdown, no explanation.
+      if (isText) {
+        // CSV / TXT — read as plain text, send as text block
+        const text = await new Promise((res, rej) => {
+          const reader = new FileReader();
+          reader.onload = () => res(reader.result);
+          reader.onerror = () => rej(new Error("Failed to read file"));
+          reader.readAsText(file);
+        });
+        messageContent = [
+          { type: "text", text: `Here is a bank statement in ${ext.toUpperCase()} format:\n\n${text}\n\nExtract ALL transactions and return ONLY JSON as specified.` }
+        ];
+      } else {
+        // PDF / XLSX / DOCX — read as base64 document
+        const base64 = await new Promise((res, rej) => {
+          const reader = new FileReader();
+          reader.onload = () => res(reader.result.split(",")[1]);
+          reader.onerror = () => rej(new Error("Failed to read file"));
+          reader.readAsDataURL(file);
+        });
 
-Format:
+        const mediaType = isPDF  ? "application/pdf"
+          : isXLSX ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          : isDOCX ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          : "application/pdf";
+
+        messageContent = [
+          {
+            type: "document",
+            source: { type: "base64", media_type: mediaType, data: base64 }
+          },
+          { type: "text", text: "Extract ALL transactions from this bank statement and return ONLY JSON as specified below." }
+        ];
+      }
+
+      // Shared extraction prompt appended to all formats
+      const extractionPrompt = `
+Return ONLY a valid JSON object with no markdown, no explanation:
 {
-  "accountName": "bank name from statement",
+  "accountName": "bank name",
   "currency": "GBP",
   "openingBalance": 0.00,
   "closingBalance": 0.00,
@@ -503,30 +524,40 @@ Format:
       "merchant": "cleaned merchant name",
       "amount": -12.50,
       "category": "one of: Food & Drink, Groceries, Transport, Bills, Subscriptions, Income, Going out, Self care, Transfers, Other",
-      "icon": "single relevant emoji"
+      "icon": "single emoji"
     }
   ]
 }
-
 Rules:
-- Debits/spending = negative amounts
-- Credits/income = positive amounts  
-- Clean merchant names (remove reference numbers, card numbers, dates)
-- Categorise accurately based on merchant name
+- Debits = negative, credits = positive
+- Clean merchant names (strip reference numbers, dates)
+- Categorise accurately by merchant name
 - Include EVERY transaction, none missing
-- Return valid JSON only`
-              }
-            ]
-          }]
+- Return valid JSON only`;
+
+      // Add extraction prompt to the last text block or append new one
+      if (isText) {
+        messageContent[0].text += extractionPrompt;
+      } else {
+        messageContent[messageContent.length - 1].text += extractionPrompt;
+      }
+
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4000,
+          messages: [{ role: "user", content: messageContent }]
         })
       });
 
       const data = await response.json();
-      const raw = data.content?.[0]?.text || "";
+      const raw  = data.content?.[0]?.text || "";
       const clean = raw.replace(/```json|```/g, "").trim();
       const parsed = JSON.parse(clean);
 
-      // Build category summaries from real transactions
+      // Build category totals
       const catTotals = {};
       parsed.transactions.forEach(t => {
         if (t.amount < 0) {
@@ -543,9 +574,9 @@ Rules:
         totalOut: parsed.totalOut,
         closingBalance: parsed.closingBalance,
         catTotals,
+        fileType: ext.toUpperCase(),
       });
 
-      // Update Ask Lucid system context with real data
       const txSummary = Object.entries(catTotals)
         .sort((a,b) => b[1]-a[1])
         .map(([k,v]) => `${k}: £${v.toFixed(2)}`)
@@ -553,14 +584,14 @@ Rules:
 
       setMsgs([{
         role: "ai",
-        text: `Your real bank statement has been loaded ✅\n\n**${parsed.accountName}** · ${parsed.period}\n\n**Money in:** £${parsed.totalIn?.toFixed(2)}\n**Money out:** £${parsed.totalOut?.toFixed(2)}\n**Closing balance:** £${parsed.closingBalance?.toFixed(2)}\n\nAsk me anything about your actual spending.`
+        text: `Your real bank statement has been loaded ✅\n\n**${parsed.accountName}** · ${parsed.period}\n\n**Money in:** £${parsed.totalIn?.toFixed(2)}\n**Money out:** £${parsed.totalOut?.toFixed(2)}\n**Closing balance:** £${parsed.closingBalance?.toFixed(2)}\n\nTop spending: ${txSummary}\n\nAsk me anything about your actual spending.`
       }]);
 
       setImportDone(true);
       setTab("home");
 
     } catch (e) {
-      setImportError("Couldn't read this PDF. Make sure it's a bank statement with transaction data, not a scanned image.");
+      setImportError(`Couldn't read this ${ext.toUpperCase()} file. Make sure it contains transaction data and isn't password protected or a scanned image.`);
     }
     setImporting(false);
   };
@@ -590,45 +621,74 @@ Rules:
   // ─────────────────────────────────────────────────────────────────────────
   const ImportScreen = () => (
     <div style={{ padding:"0 18px" }}>
-      <PageHeader title="Import statement" sub="PDF · stays on your device" backFn={() => setTab("home")} />
+      <PageHeader title="Import statement" sub="PDF · CSV · Excel · Word" backFn={() => setTab("home")} />
 
-      {/* Hidden file input */}
+      {/* Hidden file input — all supported formats */}
       <input
         ref={fileInputRef}
         type="file"
-        accept="application/pdf"
+        accept=".pdf,.csv,.txt,.xlsx,.xls,.docx,.doc"
         style={{ display:"none" }}
-        onChange={e => { if (e.target.files[0]) importPDF(e.target.files[0]); }}
+        onChange={e => { if (e.target.files[0]) importStatement(e.target.files[0]); }}
       />
 
       {/* Privacy card */}
       <div style={{ ...card({ background:"rgba(100,240,72,0.05)", borderColor:"rgba(100,240,72,0.2)", marginBottom:16 }) }}>
         <p style={{ fontSize:13, fontWeight:600, color:cl.accent, margin:"0 0 6px" }}>🔒 Your data stays private</p>
         <p style={{ fontSize:12, color:cl.t2, margin:0, lineHeight:1.6 }}>
-          Your PDF is read directly in your browser. It's sent to Claude AI to extract transactions, then immediately discarded — never stored on any server. No one at Lucid can see it.
+          Your file is read in your browser, sent to Claude AI to extract transactions, then immediately discarded. Never stored on any server.
         </p>
       </div>
 
-      {/* What works */}
+      {/* Supported formats */}
       <div style={{ ...card({ marginBottom:16 }) }}>
-        <p style={{ fontSize:13, fontWeight:600, color:cl.t1, margin:"0 0 10px" }}>Works with any UK bank PDF statement:</p>
-        {["Monzo", "Barclays", "HSBC", "Lloyds", "NatWest", "Starling", "Santander", "Halifax", "Nationwide"].map((b, i) => (
-          <div key={b} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom: i < 8 ? `1px solid ${cl.border}` : "none" }}>
-            <span style={{ color:cl.accent, fontSize:12 }}>✓</span>
-            <span style={{ fontSize:13, color:cl.t2 }}>{b}</span>
+        <p style={{ fontSize:13, fontWeight:600, color:cl.t1, margin:"0 0 12px" }}>Supported formats</p>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+          {[
+            { ext:"PDF", icon:"📄", desc:"Bank statement PDF", color:"#f26550" },
+            { ext:"CSV", icon:"📊", desc:"Exported transactions", color:"#34d399" },
+            { ext:"XLSX", icon:"📗", desc:"Excel spreadsheet", color:"#22c55e" },
+            { ext:"DOCX", icon:"📘", desc:"Word document", color:"#56a8ff" },
+          ].map(({ ext, icon, desc, color }) => (
+            <div key={ext} style={{ ...card({ background:cl.s1, padding:"12px 14px" }) }}>
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+                <span style={{ fontSize:18 }}>{icon}</span>
+                <span style={{ fontSize:13, fontWeight:700, color }}>.{ext}</span>
+              </div>
+              <p style={{ fontSize:11, color:cl.t3, margin:0 }}>{desc}</p>
+            </div>
+          ))}
+        </div>
+        <p style={{ fontSize:11, color:cl.t3, margin:"12px 0 0", lineHeight:1.5 }}>
+          Works with Monzo, Barclays, HSBC, Lloyds, NatWest, Starling, Santander, Halifax, Nationwide and more. Must be digital — not a scanned image.
+        </p>
+      </div>
+
+      {/* How to export from your bank */}
+      <div style={{ ...card({ marginBottom:16 }) }}>
+        <p style={{ fontSize:13, fontWeight:600, color:cl.t1, margin:"0 0 10px" }}>How to export from your bank</p>
+        {[
+          { bank:"Monzo", steps:"App → Account → Statements → Download CSV" },
+          { bank:"Barclays", steps:"App → Help → Statements → Download PDF" },
+          { bank:"HSBC", steps:"Online banking → Accounts → View statements → PDF" },
+          { bank:"Starling", steps:"App → Spaces → Download statement → CSV" },
+          { bank:"NatWest", steps:"Online banking → Statements → Export → CSV" },
+        ].map(({ bank, steps }, i) => (
+          <div key={bank} style={{ padding:"8px 0", borderBottom: i < 4 ? `1px solid ${cl.border}` : "none" }}>
+            <p style={{ fontSize:13, color:cl.t1, fontWeight:500, margin:"0 0 2px" }}>{bank}</p>
+            <p style={{ fontSize:11, color:cl.t3, margin:0 }}>{steps}</p>
           </div>
         ))}
-        <p style={{ fontSize:11, color:cl.t3, margin:"10px 0 0" }}>Must be a digital PDF, not a scanned image.</p>
       </div>
 
       {/* Import button or loading */}
       {importing ? (
         <div style={{ ...card({ textAlign:"center", padding:"32px 20px", marginBottom:16 }) }}>
-          <div style={{ fontSize:36, marginBottom:12 }}>📄</div>
+          <div style={{ fontSize:36, marginBottom:12 }}>⏳</div>
           <p style={{ fontSize:15, color:cl.t1, fontWeight:500, margin:"0 0 6px" }}>Reading your statement…</p>
           <p style={{ fontSize:12, color:cl.t3, margin:"0 0 16px" }}>Claude is extracting and categorising your transactions</p>
           <div style={{ height:4, background:cl.border, borderRadius:4, overflow:"hidden" }}>
-            <div style={{ height:"100%", width:"60%", background:cl.accent, borderRadius:4, animation:"pulse 1.5s ease infinite" }} />
+            <div style={{ height:"100%", width:"60%", background:cl.accent, borderRadius:4 }} />
           </div>
         </div>
       ) : (
@@ -636,7 +696,7 @@ Rules:
           onClick={() => fileInputRef.current?.click()}
           style={{ width:"100%", background:cl.accent, color:cl.accentFg, border:"none", borderRadius:14, padding:18, fontSize:16, fontWeight:600, cursor:"pointer", marginBottom:12, display:"flex", alignItems:"center", justifyContent:"center", gap:10 }}
         >
-          <span style={{ fontSize:20 }}>📄</span> Choose PDF statement
+          <span style={{ fontSize:20 }}>📂</span> Choose file to import
         </button>
       )}
 
@@ -647,18 +707,18 @@ Rules:
       )}
 
       {realSummary && (
-        <div style={{ ...card({ background:"rgba(100,240,72,0.06)", borderColor:"rgba(100,240,72,0.2)", marginBottom:16 }) }}>
-          <p style={{ fontSize:13, fontWeight:600, color:cl.accent, margin:"0 0 8px" }}>✅ {realSummary.accountName} loaded</p>
-          <p style={{ fontSize:12, color:cl.t2, margin:"0 0 4px" }}>{realSummary.period}</p>
-          <p style={{ fontSize:12, color:cl.t3, margin:0 }}>
-            {realTxns?.length} transactions imported
+        <div style={{ ...card({ background:"rgba(100,240,72,0.06)", borderColor:"rgba(100,240,72,0.2)", marginBottom:12 }) }}>
+          <p style={{ fontSize:13, fontWeight:600, color:cl.accent, margin:"0 0 6px" }}>
+            ✅ {realSummary.accountName} loaded · {realSummary.fileType}
           </p>
+          <p style={{ fontSize:12, color:cl.t2, margin:"0 0 2px" }}>{realSummary.period}</p>
+          <p style={{ fontSize:12, color:cl.t3, margin:0 }}>{realTxns?.length} transactions imported</p>
         </div>
       )}
 
       {realSummary && (
         <button
-          onClick={() => { setRealTxns(null); setRealSummary(null); setImportDone(false); }}
+          onClick={() => { setRealTxns(null); setRealSummary(null); setImportDone(false); setImportError(""); }}
           style={{ width:"100%", background:"none", border:`1px solid ${cl.red}`, color:cl.red, borderRadius:14, padding:14, fontSize:14, cursor:"pointer", marginBottom:24 }}
         >
           Clear & return to demo data
