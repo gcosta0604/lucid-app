@@ -517,7 +517,7 @@ Categories: Food & Drink, Groceries, Transport, Bills, Subscriptions, Income, Go
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
           model:"claude-sonnet-4-20250514",
-          max_tokens:4000,
+          max_tokens:8000,
           messages:[{ role:"user", content }]
         })
       });
@@ -535,15 +535,44 @@ Categories: Food & Drink, Groceries, Transport, Bills, Subscriptions, Income, Go
       if (!data.content?.[0]?.text) throw new Error("Empty response from API");
 
       const raw = data.content[0].text;
+      console.log("RAW TEXT FROM CLAUDE:", raw);
       // Strip any accidental markdown fences
       const jsonStr = raw.replace(/```json\n?/gi,"").replace(/```\n?/g,"").trim();
+      console.log("CLEANED JSON STRING:", jsonStr);
 
       let parsed;
       try {
+        // Attempt clean parse first
         parsed = JSON.parse(jsonStr);
       } catch {
-        console.error("JSON parse error. Raw text was:", jsonStr);
-        throw new Error("Could not parse the response. Open browser console (F12) and share what you see — I can fix it.");
+        // JSON was truncated — try to rescue it by closing open structures
+        console.warn("Clean parse failed, attempting truncation repair...");
+        try {
+          let repaired = jsonStr;
+          // Close any unclosed last transaction object
+          if (!repaired.trimEnd().endsWith("}]}")) {
+            // Find last complete transaction (last complete closing brace before truncation)
+            const lastComplete = repaired.lastIndexOf('},{"date"');
+            if (lastComplete !== -1) {
+              repaired = repaired.slice(0, lastComplete + 1) + "]}";
+            } else {
+              // Try just closing the array and object
+              const lastBrace = repaired.lastIndexOf('"icon"');
+              if (lastBrace !== -1) {
+                // Find the emoji value end
+                const emojiEnd = repaired.indexOf('"', lastBrace + 8);
+                if (emojiEnd !== -1) {
+                  repaired = repaired.slice(0, emojiEnd + 1) + "}]}";
+                }
+              }
+            }
+          }
+          parsed = JSON.parse(repaired);
+          console.log("Truncation repair succeeded, recovered", parsed.transactions?.length, "transactions");
+        } catch(repairErr) {
+          console.error("Repair also failed. JSON was:", jsonStr);
+          throw new Error("Could not parse the response. Open browser console (F12) and share what you see — I can fix it.");
+        }
       }
 
       if (!Array.isArray(parsed.transactions) || parsed.transactions.length === 0) {
