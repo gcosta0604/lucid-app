@@ -441,7 +441,7 @@ Float available: £175 (interest-free, repaid payday), Credit score: 612/999 (Fa
 Credit utilisation: 55% (target <30%), Not on electoral roll, Plan: Free tier.`;
 
     try {
-      const res = await fetch("/api/claude", {
+      const res = await fetch("/api/gemini", {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
@@ -455,12 +455,19 @@ Concise under 120 words, UK English, **bold** key figures only.`,
             .map(m => ({ role: m.role==="ai"?"assistant":"user", content: m.text }))
         })
       });
+      const ct = res.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        throw new Error("api-not-found");
+      }
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setMsgs(m => [...m, { role:"ai", text: data.content?.[0]?.text || "Sorry, try again." }]);
       setTimeout(() => { if (askMsgsRef.current) askMsgsRef.current.scrollTop = askMsgsRef.current.scrollHeight; }, 50);
-    } catch {
-      setMsgs(m => [...m, { role:"ai", text:"Connection issue — try again in a moment." }]);
+    } catch (e) {
+      const msg = e.message === "api-not-found"
+        ? "Can't reach the API. If you're testing on localhost, this only works on the deployed Vercel URL — not npm run dev."
+        : "Connection issue — try again in a moment.";
+      setMsgs(m => [...m, { role:"ai", text: msg }]);
     }
     setTyping(false);
   };
@@ -532,7 +539,7 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
         throw new Error(`Unsupported format .${ext} — use PDF, CSV, XLSX or DOCX`);
       }
 
-      const response = await fetch("/api/claude", {
+      const response = await fetch("/api/gemini", {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
@@ -541,6 +548,11 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
           messages:[{ role:"user", content }]
         })
       });
+
+      const ct = response.headers.get("content-type") || "";
+      if (!ct.includes("application/json")) {
+        throw new Error("Can't reach the API. If you're testing on localhost, this only works on the deployed Vercel URL — not npm run dev.");
+      }
 
       const data = await response.json();
       if (data.error) throw new Error(data.error);
