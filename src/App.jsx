@@ -400,7 +400,6 @@ export default function LucidApp() {
   const [realSummary, setRealSummary] = useState(null);
   const [importing, setImporting]   = useState(false);
   const [importError, setImportError] = useState("");
-  const [importDone, setImportDone] = useState(false);
   const fileInputRef = useRef(null);
   const [msgs, setMsgs] = useState([
     { role:"ai", text:"Hey Gabe 👋 I'm Lucid — your AI finance assistant. I can see your accounts, spending, and credit score. Ask me anything." }
@@ -413,7 +412,6 @@ export default function LucidApp() {
   ]);
   const [bankStep, setBankStep]         = useState(0);
   const [connectingBank, setConnectingBank] = useState(null);
-  const endRef = useRef(null);
 
   useEffect(() => {
     const link = document.createElement("link");
@@ -422,26 +420,35 @@ export default function LucidApp() {
     document.head.appendChild(link);
   }, []);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior:"smooth" }); }, [msgs]);
-
-  // ── Claude API ──────────────────────────────────────────────────────────────
+  // ── Claude API — routed through /api/claude serverless proxy ────────────────
   const sendMsg = async () => {
     if (!inp.trim()) return;
     const q = inp.trim(); setInp("");
     setMsgs(m => [...m, { role:"user", text:q }]);
     setTyping(true);
+
+    // Use real imported data when available, otherwise demo figures
+    const dataContext = realSummary
+      ? `User data (from imported ${realSummary.fileType} statement — REAL data): 
+Account: ${realSummary.accountName}, Period: ${realSummary.period},
+Money in: £${realSummary.totalIn.toFixed(2)}, Money out: £${realSummary.totalOut.toFixed(2)},
+Closing balance: £${realSummary.closingBalance.toFixed(2)}.
+Spending by category: ${Object.entries(realSummary.catTotals).map(([k,v]) => `${k} £${v.toFixed(2)}`).join(", ")}.
+Individual transactions available: ${realTxns?.length || 0} total — recent ones: ${realTxns?.slice(0,15).map(t => `${t.date} ${t.merchant} £${t.amount}`).join("; ")}.`
+      : `User data (DEMO data, not real): Name: Gabe, Balance: £247.83 (Monzo), Savings: £430 at 4.1% AER (Barclays),
+Pay cycle: 18 Apr→26 Apr (9 days left), Income: £1,850/mo, Spent: £1,102, Left: £748,
+Float available: £175 (interest-free, repaid payday), Credit score: 612/999 (Fair, Experian),
+Credit utilisation: 55% (target <30%), Not on electoral roll, Plan: Free tier.`;
+
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
+      const res = await fetch("/api/claude", {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
           model:"claude-sonnet-4-20250514",
           max_tokens:1000,
           system:`You are Lucid, a UK-based AI financial assistant. Honest, direct, never upsell.
-User data: Name: Gabe, Balance: £247.83 (Monzo), Savings: £430 at 4.1% AER (Barclays),
-Pay cycle: 18 Apr→26 Apr (9 days left), Income: £1,850/mo, Spent: £1,102, Left: £748,
-Float available: £175 (interest-free, repaid payday), Credit score: 612/999 (Fair, Experian),
-Credit utilisation: 55% (target <30%), Not on electoral roll, Plan: Free tier.
+${dataContext}
 Float fees: Standard free, Next day £1.99, Instant £1.49–£4.49. Full amount in ONE transfer always.
 Concise under 120 words, UK English, **bold** key figures only.`,
           messages: msgs.concat([{role:"user",text:q}])
@@ -449,6 +456,7 @@ Concise under 120 words, UK English, **bold** key figures only.`,
         })
       });
       const data = await res.json();
+      if (data.error) throw new Error(data.error);
       setMsgs(m => [...m, { role:"ai", text: data.content?.[0]?.text || "Sorry, try again." }]);
       setTimeout(() => { if (askMsgsRef.current) askMsgsRef.current.scrollTop = askMsgsRef.current.scrollHeight; }, 50);
     } catch {
@@ -457,7 +465,7 @@ Concise under 120 words, UK English, **bold** key figures only.`,
     setTyping(false);
   };
 
-  // ── Multi-format Bank Statement Import ─────────────────────────────────────
+  // ── Multi-format Bank Statement Import — NDJSON, routed through /api/claude ──
   const toBase64 = (file) => new Promise((res, rej) => {
     const reader = new FileReader();
     reader.onload = () => res(reader.result.split(",")[1]);
@@ -475,9 +483,21 @@ Concise under 120 words, UK English, **bold** key figures only.`,
     const isXLSX = ext === "xlsx" || ext === "xls";
     const isDOCX = ext === "docx" || ext === "doc";
 
-    const extractionPrompt = `Extract ALL transactions from this bank statement. Return ONLY valid JSON with no markdown, no explanation, no code fences:
-{"accountName":"bank name","openingBalance":0.00,"closingBalance":0.00,"totalIn":0.00,"totalOut":0.00,"period":"DD MMM – DD MMM YYYY","transactions":[{"date":"DD MMM","merchant":"clean name","amount":-12.50,"category":"Food & Drink","icon":"🍽️"}]}
-Categories: Food & Drink, Groceries, Transport, Bills, Subscriptions, Income, Going out, Self care, Transfers, Other. Debits=negative, credits=positive. Clean merchant names. Include every transaction.`;
+    // NDJSON format: one JSON object per line. Far more robust to truncation
+    // than a single giant JSON blob — every complete line before a cut-off
+    // point is still valid and usable, so nothing needs brace-repair.
+    const extractionPrompt = `Extract every transaction from this bank statement.
+
+Output NDJSON only — one JSON object per line, nothing else. No markdown, no code fences, no commentary, no blank lines.
+
+The FIRST line must be a summary object:
+{"type":"summary","accountName":"bank name","openingBalance":0.00,"closingBalance":0.00,"totalIn":0.00,"totalOut":0.00,"period":"DD MMM – DD MMM YYYY"}
+
+Every line after that is one transaction object:
+{"type":"txn","date":"DD MMM","merchant":"clean name","amount":-12.50,"category":"Food & Drink","icon":"🍽️"}
+
+Categories: Food & Drink, Groceries, Transport, Bills, Subscriptions, Income, Going out, Self care, Transfers, Other.
+Rules: debits negative, credits positive, clean merchant names (strip reference numbers), include every transaction, one JSON object per line with nothing else on that line.`;
 
     try {
       let content = [];
@@ -512,7 +532,7 @@ Categories: Food & Drink, Groceries, Transport, Bills, Subscriptions, Income, Go
         throw new Error(`Unsupported format .${ext} — use PDF, CSV, XLSX or DOCX`);
       }
 
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("/api/claude", {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
@@ -522,80 +542,52 @@ Categories: Food & Drink, Groceries, Transport, Bills, Subscriptions, Income, Go
         })
       });
 
-      if (!response.ok) {
-        const err = await response.text();
-        console.error("Anthropic API error:", response.status, err);
-        throw new Error(`API returned ${response.status} — check console for details`);
-      }
-
       const data = await response.json();
-      console.log("Anthropic response:", JSON.stringify(data, null, 2));
-
-      if (data.error) throw new Error(data.error.message);
-      if (!data.content?.[0]?.text) throw new Error("Empty response from API");
+      if (data.error) throw new Error(data.error);
+      if (!data.content?.[0]?.text) throw new Error("Empty response — try again");
 
       const raw = data.content[0].text;
-      console.log("RAW TEXT FROM CLAUDE:", raw);
-      // Strip any accidental markdown fences
-      const jsonStr = raw.replace(/```json\n?/gi,"").replace(/```\n?/g,"").trim();
-      console.log("CLEANED JSON STRING:", jsonStr);
 
-      let parsed;
-      try {
-        // Attempt clean parse first
-        parsed = JSON.parse(jsonStr);
-      } catch {
-        // JSON was truncated — try to rescue it by closing open structures
-        console.warn("Clean parse failed, attempting truncation repair...");
+      // Parse NDJSON: split by line, parse each independently, skip any
+      // that fail (e.g. a truncated final line) rather than failing the
+      // whole import.
+      const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
+      let summary = null;
+      const parsedTxns = [];
+
+      for (const line of lines) {
         try {
-          let repaired = jsonStr;
-          // Close any unclosed last transaction object
-          if (!repaired.trimEnd().endsWith("}]}")) {
-            // Find last complete transaction (last complete closing brace before truncation)
-            const lastComplete = repaired.lastIndexOf('},{"date"');
-            if (lastComplete !== -1) {
-              repaired = repaired.slice(0, lastComplete + 1) + "]}";
-            } else {
-              // Try just closing the array and object
-              const lastBrace = repaired.lastIndexOf('"icon"');
-              if (lastBrace !== -1) {
-                // Find the emoji value end
-                const emojiEnd = repaired.indexOf('"', lastBrace + 8);
-                if (emojiEnd !== -1) {
-                  repaired = repaired.slice(0, emojiEnd + 1) + "}]}";
-                }
-              }
-            }
-          }
-          parsed = JSON.parse(repaired);
-          console.log("Truncation repair succeeded, recovered", parsed.transactions?.length, "transactions");
-        } catch(repairErr) {
-          console.error("Repair also failed. JSON was:", jsonStr);
-          throw new Error("Could not parse the response. Open browser console (F12) and share what you see — I can fix it.");
+          const obj = JSON.parse(line);
+          if (obj.type === "summary") summary = obj;
+          else if (obj.type === "txn") parsedTxns.push(obj);
+        } catch {
+          // Incomplete or malformed line (usually the last one if truncated)
+          // — skip it, keep everything parsed so far.
+          continue;
         }
       }
 
-      if (!Array.isArray(parsed.transactions) || parsed.transactions.length === 0) {
+      if (parsedTxns.length === 0) {
         throw new Error("No transactions found. Make sure this file is a bank statement with transaction rows.");
       }
 
       const catTotals = {};
-      parsed.transactions.forEach(t => {
+      parsedTxns.forEach(t => {
         if (t.amount < 0) {
           const cat = t.category || "Other";
           catTotals[cat] = (catTotals[cat] || 0) + Math.abs(t.amount);
         }
       });
 
-      const totalIn  = parsed.totalIn  || parsed.transactions.filter(t=>t.amount>0).reduce((s,t)=>s+t.amount,0);
-      const totalOut = parsed.totalOut || parsed.transactions.filter(t=>t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
+      const totalIn  = summary?.totalIn  || parsedTxns.filter(t=>t.amount>0).reduce((s,t)=>s+t.amount,0);
+      const totalOut = summary?.totalOut || parsedTxns.filter(t=>t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
 
-      setRealTxns(parsed.transactions);
+      setRealTxns(parsedTxns);
       setRealSummary({
-        accountName: parsed.accountName || "Your bank",
-        period: parsed.period || "Imported",
+        accountName: summary?.accountName || "Your bank",
+        period: summary?.period || "Imported",
         totalIn, totalOut,
-        closingBalance: parsed.closingBalance || 0,
+        closingBalance: summary?.closingBalance || 0,
         catTotals,
         fileType: ext.toUpperCase(),
       });
@@ -604,13 +596,11 @@ Categories: Food & Drink, Groceries, Transport, Bills, Subscriptions, Income, Go
         .sort((a,b)=>b[1]-a[1]).slice(0,3)
         .map(([k,v])=>`${k} £${v.toFixed(0)}`).join(" · ");
 
-      setMsgs([{ role:"ai", text:`Statement loaded ✅\n\n**${parsed.accountName || "Your bank"}** · ${parsed.period || ""}\n\n**In:** £${totalIn.toFixed(2)} · **Out:** £${totalOut.toFixed(2)}\n**Top spend:** ${topSpend}\n\nAsk me anything about your real spending.` }]);
+      setMsgs([{ role:"ai", text:`Statement loaded ✅\n\n**${summary?.accountName || "Your bank"}** · ${summary?.period || ""}\n\n**In:** £${totalIn.toFixed(2)} · **Out:** £${totalOut.toFixed(2)}\n**Top spend:** ${topSpend}\n\nAsk me anything about your real spending.` }]);
 
-      setImportDone(true);
       setTab("home");
 
     } catch(e) {
-      console.error("Import error:", e);
       setImportError(e.message || `Could not read this ${ext.toUpperCase()}. Try exporting as CSV from your bank app — it's the most reliable format.`);
     }
     setImporting(false);
@@ -738,7 +728,7 @@ Categories: Food & Drink, Groceries, Transport, Bills, Subscriptions, Income, Go
 
       {realSummary && (
         <button
-          onClick={() => { setRealTxns(null); setRealSummary(null); setImportDone(false); setImportError(""); }}
+          onClick={() => { setRealTxns(null); setRealSummary(null); setImportError(""); }}
           style={{ width:"100%", background:"none", border:`1px solid ${cl.red}`, color:cl.red, borderRadius:14, padding:14, fontSize:14, cursor:"pointer", marginBottom:24 }}
         >
           Clear & return to demo data
