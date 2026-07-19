@@ -147,30 +147,59 @@ function CatBar({ name, amt, lim, color, icon }) {
 // imported data (no per-category colour is assigned by the extraction step).
 const catPalette = [cl.accent, cl.blue, cl.purple, cl.warn, cl.red, "#34d399", "#f97316", "#818cf8", "#eab308", "#ec4899"];
 
-function CategoryDonut({ entries, size = 140 }) {
+function CategoryDonut({ entries, size = 140, selected, onSelect }) {
   const total = entries.reduce((s, e) => s + e.amt, 0) || 1;
   const r = 52, cx = 60, cy = 60, circ = 2 * Math.PI * r;
+  const sel = entries.find(e => e.name === selected);
+  const centerBig = sel ? `£${Math.round(sel.amt)}` : `£${Math.round(total)}`;
+  const centerSmall = sel ? (sel.name.length > 13 ? sel.name.slice(0, 12) + "…" : sel.name) : "total spend";
   let offset = 0;
   return (
     <svg width={size} height={size} viewBox="0 0 120 120">
       <circle cx={cx} cy={cy} r={r} fill="none" stroke={cl.border} strokeWidth="14" />
       {entries.map((e, i) => {
         const dash = (e.amt / total) * circ;
+        const isSel = e.name === selected;
         const el = (
-          <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={e.color} strokeWidth="14"
+          <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={e.color}
+            strokeWidth={isSel ? 18 : 14}
+            strokeOpacity={selected && !isSel ? 0.35 : 1}
             strokeDasharray={`${dash} ${circ - dash}`} strokeDashoffset={-offset}
-            transform={`rotate(-90 ${cx} ${cy})`} style={{ transition: "stroke-dasharray 0.6s" }} />
+            transform={`rotate(-90 ${cx} ${cy})`}
+            style={{ transition: "stroke-width 0.2s, stroke-opacity 0.2s", cursor: onSelect ? "pointer" : "default" }}
+            onClick={onSelect ? () => onSelect(isSel ? null : e.name) : undefined} />
         );
         offset += dash;
         return el;
       })}
-      <text x={cx} y={cy - 4} textAnchor="middle" fill={cl.t1} fontSize="16" fontFamily={ff} fontWeight="600">£{Math.round(total)}</text>
-      <text x={cx} y={cy + 12} textAnchor="middle" fill={cl.t3} fontSize="9" fontFamily={ff}>total spend</text>
+      <text x={cx} y={cy - 4} textAnchor="middle" fill={cl.t1} fontSize={sel ? 14 : 16} fontFamily={ff} fontWeight="600">{centerBig}</text>
+      <text x={cx} y={cy + 12} textAnchor="middle" fill={cl.t3} fontSize="9" fontFamily={ff}>{centerSmall}</text>
     </svg>
   );
 }
 
-function SpendTrendChart({ data }) {
+function CategoryLegend({ entries, selected, onSelect }) {
+  const total = entries.reduce((s, e) => s + e.amt, 0) || 1;
+  return (
+    <div>
+      {entries.map(e => {
+        const isSel = e.name === selected;
+        const pct = Math.round((e.amt / total) * 100);
+        return (
+          <div key={e.name} onClick={() => onSelect(isSel ? null : e.name)}
+            style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 8px", borderRadius:8, cursor:"pointer", background: isSel ? `${e.color}18` : "transparent" }}>
+            <span style={{ width:9, height:9, borderRadius:"50%", background:e.color, flexShrink:0 }} />
+            <span style={{ flex:1, fontSize:12, color: isSel ? cl.t1 : cl.t2, fontWeight: isSel ? 600 : 400 }}>{e.name}</span>
+            <span style={{ fontSize:12, color:cl.t1, fontWeight:600 }}>£{e.amt.toFixed(0)}</span>
+            <span style={{ fontSize:11, color:cl.t3, width:32, textAlign:"right" }}>{pct}%</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SpendTrendChart({ data, selectedIdx, onSelect }) {
   const w = 290, drawH = 70, topPad = 18, botPad = 16, gap = 10;
   const h = drawH + topPad + botPad;
   const max = Math.max(...data.map(d => d.amt), 1);
@@ -181,11 +210,14 @@ function SpendTrendChart({ data }) {
         const barH = Math.max((d.amt / max) * drawH, 2);
         const x = i * (barW + gap);
         const y = topPad + (drawH - barH);
+        const isSel = selectedIdx === i;
+        const dimmed = selectedIdx != null && !isSel;
         return (
-          <g key={i}>
-            <text x={x + barW/2} y={topPad - 6} textAnchor="middle" fill={cl.t2} fontSize="10" fontFamily={ff} fontWeight="600">£{Math.round(d.amt)}</text>
-            <rect x={x} y={y} width={barW} height={barH} fill={cl.accent} rx={4} style={{ transition:"height 0.5s, y 0.5s" }} />
-            <text x={x + barW/2} y={h - 2} textAnchor="middle" fill={cl.t3} fontSize="9" fontFamily={ff}>{d.label}</text>
+          <g key={i} style={{ cursor: onSelect ? "pointer" : "default" }} onClick={onSelect ? () => onSelect(isSel ? null : i) : undefined}>
+            <rect x={x} y={0} width={barW} height={h} fill="transparent" />
+            <text x={x + barW/2} y={topPad - 6} textAnchor="middle" fill={isSel ? cl.t1 : cl.t2} fontSize="10" fontFamily={ff} fontWeight="600">£{Math.round(d.amt)}</text>
+            <rect x={x} y={y} width={barW} height={barH} fill={cl.accent} rx={4} opacity={dimmed ? 0.35 : 1} style={{ transition:"height 0.5s, y 0.5s, opacity 0.2s" }} />
+            <text x={x + barW/2} y={h - 2} textAnchor="middle" fill={isSel ? cl.t1 : cl.t3} fontSize="9" fontFamily={ff} fontWeight={isSel ? 700 : 400}>{d.label}</text>
           </g>
         );
       })}
@@ -341,6 +373,11 @@ export default function LucidApp() {
   const [typing, setTyping]   = useState(false);
   const [autoSave, setAutoSave] = useState(() => loadPersisted().autoSave ?? false);
   const [roundUp, setRoundUp]   = useState(() => loadPersisted().roundUp ?? true);
+  // Chart selection — lifted up (rather than local to BudgetScreen) so it
+  // survives re-renders; screens in this app are recreated on every parent
+  // render, which would otherwise reset any state defined inside them.
+  const [selectedCat, setSelectedCat] = useState(null);
+  const [selectedPeriodIdx, setSelectedPeriodIdx] = useState(null);
   const [connectedBanks, setConnectedBanks] = useState([
     { id:"monzo",   name:"Monzo",   bg:"#ff6b35", init:"M", accounts:[{ name:"Personal", balance:247.83 }] },
     { id:"barclays",name:"Barclays",bg:"#00aeef", init:"B", accounts:[{ name:"Savings",  balance:430.00 }] },
@@ -846,23 +883,51 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
       ? catEntries.map(([name, amt]) => ({ name, amt }))
       : [...cats].sort((a,b) => b.amt - a.amt).map(c => ({ name: c.name, amt: c.amt }))
     ).map((e, i) => ({ ...e, color: catPalette[i % catPalette.length] }));
-    const biggest = donutEntries[0];
-    const biggestPct = Math.round((biggest.amt / (donutEntries.reduce((s,e)=>s+e.amt,0) || 1)) * 100);
 
     // One bar per imported statement — only meaningful once there's a history to compare.
     const trendData = statements.map(s => ({
       label: (s.period.split(/[–—-]/)[0] || s.period).trim().slice(0, 8),
       amt: s.totalOut,
     }));
+    const prevOut = statements.length >= 2 ? statements[statements.length - 2].totalOut : null;
+    const pctChange = prevOut ? Math.round(((totalOut - prevOut) / prevOut) * 100) : null;
+
+    const selectedStatement = selectedPeriodIdx != null ? statements[selectedPeriodIdx] : null;
+    const selectedPrev = selectedPeriodIdx != null && selectedPeriodIdx > 0 ? statements[selectedPeriodIdx - 1] : null;
+    const selectedTopCat = selectedStatement
+      ? Object.entries(selectedStatement.catTotals).sort((a,b) => b[1]-a[1])[0]
+      : null;
+    const selectedChange = selectedStatement && selectedPrev
+      ? Math.round(((selectedStatement.totalOut - selectedPrev.totalOut) / selectedPrev.totalOut) * 100)
+      : null;
+
+    const merchantTotals = {};
+    activeTxns.forEach(t => {
+      const amt = t.a ?? t.amount;
+      if (amt < 0) {
+        const name = t.m ?? t.merchant;
+        merchantTotals[name] = (merchantTotals[name] || 0) + Math.abs(amt);
+      }
+    });
+    const topMerchants = Object.entries(merchantTotals).sort((a,b) => b[1]-a[1]).slice(0, 5);
 
     return (
     <div style={{ padding:"0 18px" }}>
       <PageHeader title={period} sub="Pay cycle budget" />
       <div style={{ ...card({ display:"flex", justifyContent:"space-between", marginBottom:12 }) }}>
-        {[{l:"Income",v:`£${totalIn.toFixed(0)}`,c:cl.t1},{l:"Spent",v:`£${totalOut.toFixed(0)}`,c:cl.warn},{l:"Left",v:`£${left.toFixed(0)}`,c:cl.accent}].map(({ l, v, c }) => (
+        {[
+          {l:"Income",v:`£${totalIn.toFixed(0)}`,c:cl.t1},
+          {l:"Spent",v:`£${totalOut.toFixed(0)}`,c:cl.warn, change:pctChange},
+          {l:"Left",v:`£${left.toFixed(0)}`,c:cl.accent},
+        ].map(({ l, v, c, change }) => (
           <div key={l} style={{ textAlign:"center" }}>
             <p style={{ fontSize:19, fontWeight:600, color:c, margin:"0 0 3px" }}>{v}</p>
-            <p style={{ fontSize:11, color:cl.t3, margin:0 }}>{l}</p>
+            <p style={{ fontSize:11, color:cl.t3, margin:0 }}>
+              {l}
+              {change != null && (
+                <span style={{ color: change > 0 ? cl.red : cl.accent, fontWeight:600 }}> {change > 0 ? "▲" : "▼"}{Math.abs(change)}%</span>
+              )}
+            </p>
           </div>
         ))}
       </div>
@@ -870,41 +935,67 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
         <p style={{ fontSize:12, color:"#9fe88a", margin:0, lineHeight:1.55 }}>✓ <strong>Payday-cycle budgeting</strong> — resets on your actual pay date, not the 1st.</p>
       </div>
 
-      {/* Spending breakdown donut */}
+      {/* Spending breakdown donut — tap a segment or legend row to drill in */}
       <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>Spending breakdown</h3>
-      <div style={{ ...card({ display:"flex", alignItems:"center", gap:16, marginBottom:14 }) }}>
-        <CategoryDonut entries={donutEntries} />
+      <div style={{ ...card({ display:"flex", alignItems:"flex-start", gap:16, marginBottom:14 }) }}>
+        <div style={{ flexShrink:0 }}>
+          <CategoryDonut entries={donutEntries} selected={selectedCat} onSelect={setSelectedCat} />
+        </div>
         <div style={{ flex:1, minWidth:0 }}>
-          <p style={{ fontSize:12, color:cl.t3, margin:"0 0 4px" }}>Biggest category</p>
-          <p style={{ fontSize:16, color:cl.t1, fontWeight:600, margin:"0 0 2px" }}>{biggest.name}</p>
-          <p style={{ fontSize:13, color:cl.accent, margin:0 }}>£{biggest.amt.toFixed(0)} · {biggestPct}% of spend</p>
+          <CategoryLegend entries={donutEntries} selected={selectedCat} onSelect={setSelectedCat} />
         </div>
       </div>
 
-      {/* Spending trend across imported statements */}
-      {trendData.length >= 2 && (
+      {/* Top merchants */}
+      {topMerchants.length > 0 && (
         <>
-          <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>Spending trend</h3>
+          <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>Top merchants</h3>
           <div style={{ ...card({ marginBottom:14 }) }}>
-            <SpendTrendChart data={trendData} />
+            {topMerchants.map(([name, amt], i) => (
+              <div key={name} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 0", borderBottom: i < topMerchants.length-1 ? `1px solid ${cl.border}` : "none" }}>
+                <span style={{ fontSize:13, color:cl.t2 }}>{i+1}. {name}</span>
+                <span style={{ fontSize:13, color:cl.t1, fontWeight:600 }}>£{amt.toFixed(0)}</span>
+              </div>
+            ))}
           </div>
         </>
       )}
 
-      <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>
-        {realSummary ? "Spending by category (share of total)" : "Categories"}
-      </h3>
-      <div style={{ ...card({ marginBottom:14 }) }}>
-        {realSummary
-          ? catEntries.map(([name, amt]) => <CatBar key={name} name={name} amt={amt} lim={totalOut} color={cl.accent} icon="💳" />)
-          : cats.map((c, i) => <CatBar key={i} {...c} />)
-        }
-      </div>
+      {/* Spending trend across imported statements — tap a bar to drill in */}
+      {trendData.length >= 2 && (
+        <>
+          <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>Spending trend</h3>
+          <div style={{ ...card({ marginBottom: selectedStatement ? 0 : 14 }) }}>
+            <SpendTrendChart data={trendData} selectedIdx={selectedPeriodIdx} onSelect={setSelectedPeriodIdx} />
+          </div>
+          {selectedStatement && (
+            <div style={{ ...card({ background:"rgba(100,240,72,0.05)", borderColor:"rgba(100,240,72,0.18)", marginTop:8, marginBottom:14 }) }}>
+              <p style={{ fontSize:13, fontWeight:600, color:cl.t1, margin:"0 0 4px" }}>{selectedStatement.period}</p>
+              <p style={{ fontSize:12, color:cl.t2, margin:"0 0 2px" }}>
+                Spent £{selectedStatement.totalOut.toFixed(0)}
+                {selectedChange != null && (
+                  <span style={{ color: selectedChange > 0 ? cl.red : cl.accent, fontWeight:600 }}> ({selectedChange > 0 ? "▲" : "▼"}{Math.abs(selectedChange)}% vs previous)</span>
+                )}
+              </p>
+              {selectedTopCat && (
+                <p style={{ fontSize:12, color:cl.t3, margin:0 }}>Top category: {selectedTopCat[0]} · £{selectedTopCat[1].toFixed(0)}</p>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
       {!realSummary && (
-        <div style={{ ...card({ background:"rgba(242,101,80,0.06)", borderColor:"rgba(242,101,80,0.2)", marginBottom:14 }) }}>
-          <p style={{ fontSize:13, fontWeight:500, color:cl.red, margin:"0 0 2px" }}>🎉 Going out — £6.80 over budget</p>
-          <p style={{ fontSize:12, color:cl.t3, margin:0 }}>9 days left to recover.</p>
-        </div>
+        <>
+          <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>Categories</h3>
+          <div style={{ ...card({ marginBottom:14 }) }}>
+            {cats.map((c, i) => <CatBar key={i} {...c} />)}
+          </div>
+          <div style={{ ...card({ background:"rgba(242,101,80,0.06)", borderColor:"rgba(242,101,80,0.2)", marginBottom:14 }) }}>
+            <p style={{ fontSize:13, fontWeight:500, color:cl.red, margin:"0 0 2px" }}>🎉 Going out — £6.80 over budget</p>
+            <p style={{ fontSize:12, color:cl.t3, margin:0 }}>9 days left to recover.</p>
+          </div>
+        </>
       )}
       <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>All transactions</h3>
       <div style={{ ...card(), marginBottom:24 }}>
