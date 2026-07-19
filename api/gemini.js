@@ -56,7 +56,14 @@ export default async function handler(req, res) {
 
   const body = {
     contents,
-    generationConfig: { maxOutputTokens: max_tokens || 1000 },
+    generationConfig: {
+      maxOutputTokens: max_tokens || 1000,
+      // gemini-2.5-flash spends part of maxOutputTokens on internal "thinking"
+      // before it writes the visible answer — with a modest token budget that
+      // can eat the whole response and cut it short. This app wants fast,
+      // concise replies, not deep reasoning, so thinking is switched off.
+      thinkingConfig: { thinkingBudget: 0 },
+    },
   };
   if (system) body.systemInstruction = { parts: [{ text: system }] };
 
