@@ -1,5 +1,17 @@
 import { useState, useEffect, useRef } from "react";
 
+// ── Persistence ───────────────────────────────────────────────────────────────
+const STORAGE_KEY = "lucid-app-state-v1";
+
+function loadPersisted() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
 // ── Tokens ────────────────────────────────────────────────────────────────────
 const cl = {
   bg: "#060d08", s1: "#0c1810", s2: "#111e15",
@@ -10,10 +22,6 @@ const cl = {
 const ff = "'DM Sans', system-ui, sans-serif";
 const fs = "'Cormorant Garamond', Georgia, serif";
 
-const getFloatFee = (a, s) => {
-  if (s === "free") return 0; if (s === "next") return 1.99;
-  return a <= 50 ? 1.49 : a <= 100 ? 2.49 : a <= 150 ? 3.49 : 4.49;
-};
 const card  = (e = {}) => ({ background: cl.s2, border: `1px solid ${cl.border}`, borderRadius: 16, padding: "16px 18px", ...e });
 const gradCard = (e = {}) => ({ ...card(), background: "linear-gradient(145deg,#162b1a,#0e1e13)", borderColor: "#235530", ...e });
 
@@ -58,16 +66,9 @@ const ukBanks = [
   { id:"virgin",    name:"Virgin Money", bg:"#e10514", init:"V"  },
 ];
 const plans = [
-  { key:"free",    name:"Free",    price:"£0",    sub:"Always free",  current:true,  color:cl.t2,    features:["Payday-cycle budgeting","Smart categorisation","Float up to £50 (standard)","Savings 4.1% AER","Ask Lucid (AI chat)"] },
-  { key:"plus",    name:"Plus",    price:"£4.99", sub:"per month",    current:false, color:cl.accent, highlight:true, features:["Everything in Free","Float up to £200 + instant transfers","Credit score monitoring","Debt Reset tool","Open Banking (all banks)","Priority support"] },
+  { key:"free",    name:"Free",    price:"£0",    sub:"Always free",  current:true,  color:cl.t2,    features:["Payday-cycle budgeting","Smart categorisation","Savings 4.1% AER","Ask Lucid (AI chat)"] },
+  { key:"plus",    name:"Plus",    price:"£4.99", sub:"per month",    current:false, color:cl.accent, highlight:true, features:["Everything in Free","Credit score monitoring","Debt Reset tool","Open Banking (all banks)","Priority support"] },
   { key:"builder", name:"Builder", price:"£7.99", sub:"per month",    current:false, color:cl.blue,   features:["Everything in Plus","Lucid Card (credit builder)","Credit boost challenges","1-to-1 financial coaching /mo"] },
-];
-
-// ── Float score factors ───────────────────────────────────────────────────────
-const floatScoreFactors = [
-  { name: "Repayment history", score: 100, max: 100, detail: "Always repaid on time — never changes your limit", color: cl.accent },
-  { name: "Income consistency", score: 70, max: 100, detail: "Regular salary detected · 3 months of data", color: cl.accent },
-  { name: "Account activity",   score: 55, max: 100, detail: "More transaction history increases your limit over time", color: cl.warn },
 ];
 
 // ── Shared components ─────────────────────────────────────────────────────────
@@ -137,125 +138,6 @@ function CatBar({ name, amt, lim, color, icon }) {
       </div>
       <div style={{ height: 5, background: cl.border, borderRadius: 6, overflow:"hidden" }}>
         <div style={{ height:"100%", width:`${pct}%`, background: over ? cl.red : color, borderRadius: 6, transition:"width 0.5s" }} />
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ── NEW: Fee Receipt component
-// ─────────────────────────────────────────────────────────────────────────────
-function FeeReceipt({ amt, fee, recv, speed, repayDate, onClose }) {
-  const ts = new Date().toLocaleString("en-GB", { day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" });
-  return (
-    <div style={{ position:"fixed", inset:0, zIndex:60, background:"rgba(0,0,0,0.75)", backdropFilter:"blur(6px)", display:"flex", alignItems:"flex-end", justifyContent:"center" }}>
-      <div style={{ width:"100%", maxWidth:430, background:cl.s1, borderRadius:"20px 20px 0 0", border:`1px solid ${cl.border}`, padding:"24px 20px 36px" }}>
-
-        {/* header */}
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
-          <div>
-            <p style={{ fontFamily:fs, fontSize:22, fontWeight:600, color:cl.t1, margin:0 }}>Fee Receipt</p>
-            <p style={{ fontSize:11, color:cl.t3, margin:0 }}>{ts}</p>
-          </div>
-          <div style={{ width:36, height:36, borderRadius:"50%", background:"rgba(100,240,72,0.12)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>✅</div>
-        </div>
-
-        {/* guarantee badge */}
-        <div style={{ ...card({ background:"rgba(100,240,72,0.07)", borderColor:"rgba(100,240,72,0.25)", padding:"12px 14px", marginBottom:16 }) }}>
-          <p style={{ fontSize:12, fontWeight:600, color:cl.accent, margin:"0 0 3px" }}>✓ Full-amount guarantee</p>
-          <p style={{ fontSize:12, color:cl.t3, margin:0, lineHeight:1.5 }}>
-            Your entire £{amt.toFixed(2)} will arrive in <strong style={{ color:cl.t1 }}>one transfer</strong>.
-            We never split advances to charge fees multiple times.
-          </p>
-        </div>
-
-        {/* line items */}
-        <div style={{ ...card({ background:cl.s2, padding:"4px 14px", marginBottom:14 }) }}>
-          {[
-            { k:"Float amount requested", v:`£${amt.toFixed(2)}`,  bold:false },
-            { k:"Transfer fee",           v: fee === 0 ? "Free ✓" : `-£${fee.toFixed(2)}`, col: fee === 0 ? cl.accent : cl.warn, bold:false },
-            { k:"Amount you receive",     v:`£${recv.toFixed(2)}`, bold:true  },
-            { k:"Transfer speed",         v: speed === "free" ? "Standard (1–3 days)" : speed === "next" ? "Next day" : "Instant", bold:false },
-            { k:"Interest rate",          v:"0.00% — none",        bold:false },
-            { k:"Credit check",           v:"None",                bold:false },
-            { k:"Repayment date",         v: repayDate,            bold:false },
-            { k:"Repayment amount",       v:`£${amt.toFixed(2)}`,  bold:false },
-          ].map(({ k, v, bold, col }) => (
-            <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"9px 0", borderBottom:`1px solid ${cl.border}` }}>
-              <span style={{ fontSize:13, color:cl.t3 }}>{k}</span>
-              <span style={{ fontSize:13, fontWeight: bold ? 700 : 500, color: col || (bold ? cl.t1 : cl.t2) }}>{v}</span>
-            </div>
-          ))}
-          <p style={{ fontSize:11, color:cl.t3, margin:"10px 0 4px", lineHeight:1.55 }}>
-            This receipt confirms every charge associated with your Float. Save or screenshot it — it's yours.
-          </p>
-        </div>
-
-        <button onClick={onClose} style={{ width:"100%", background:cl.accent, color:cl.accentFg, border:"none", borderRadius:14, padding:15, fontSize:15, fontWeight:600, cursor:"pointer" }}>
-          Done
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ── NEW: Float Score Explainer
-// ─────────────────────────────────────────────────────────────────────────────
-function FloatScorePanel({ onClose }) {
-  const total = floatScoreFactors.reduce((s, f) => s + f.score, 0);
-  const maxTotal = floatScoreFactors.reduce((s, f) => s + f.max, 0);
-  const pct = Math.round((total / maxTotal) * 100);
-  return (
-    <div style={{ position:"fixed", inset:0, zIndex:60, background:"rgba(0,0,0,0.75)", backdropFilter:"blur(6px)", display:"flex", alignItems:"flex-end", justifyContent:"center" }}>
-      <div style={{ width:"100%", maxWidth:430, background:cl.s1, borderRadius:"20px 20px 0 0", border:`1px solid ${cl.border}`, padding:"24px 20px 36px" }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
-          <div>
-            <p style={{ fontFamily:fs, fontSize:22, fontWeight:600, color:cl.t1, margin:0 }}>Your Float score</p>
-            <p style={{ fontSize:12, color:cl.t3, margin:"3px 0 0" }}>Why your limit is £175 — and how to raise it</p>
-          </div>
-          <button onClick={onClose} style={{ background:"none", border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:8, padding:"5px 10px", cursor:"pointer", fontSize:13 }}>✕</button>
-        </div>
-
-        {/* Big score */}
-        <div style={{ ...card({ background:"rgba(100,240,72,0.06)", borderColor:"rgba(100,240,72,0.2)", textAlign:"center", padding:"18px 14px", marginBottom:14 }) }}>
-          <p style={{ fontFamily:fs, fontSize:52, fontWeight:600, color:cl.accent, margin:"0 0 2px", lineHeight:1 }}>{pct}<span style={{ fontSize:24, color:cl.t2 }}>%</span></p>
-          <p style={{ fontSize:12, color:cl.t3, margin:0 }}>Float eligibility score · updates every pay cycle</p>
-          <div style={{ height:6, background:cl.border, borderRadius:6, overflow:"hidden", margin:"12px 0 0" }}>
-            <div style={{ height:"100%", width:`${pct}%`, background:cl.accent, borderRadius:6, transition:"width 0.6s" }} />
-          </div>
-        </div>
-
-        {/* Factor breakdown */}
-        <h3 style={{ fontSize:11, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>What makes up your score</h3>
-        <div style={{ ...card({ marginBottom:14 }) }}>
-          {floatScoreFactors.map((f, i) => {
-            const fpct = Math.round((f.score / f.max) * 100);
-            return (
-              <div key={i} style={{ paddingBottom: i < floatScoreFactors.length - 1 ? 12 : 0, marginBottom: i < floatScoreFactors.length - 1 ? 12 : 0, borderBottom: i < floatScoreFactors.length - 1 ? `1px solid ${cl.border}` : "none" }}>
-                <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
-                  <span style={{ fontSize:13, color:cl.t1, fontWeight:500 }}>{f.name}</span>
-                  <span style={{ fontSize:12, color:f.color, fontWeight:600 }}>{fpct}%</span>
-                </div>
-                <div style={{ height:4, background:cl.border, borderRadius:4, overflow:"hidden", marginBottom:5 }}>
-                  <div style={{ height:"100%", width:`${fpct}%`, background:f.color, borderRadius:4, transition:"width 0.5s" }} />
-                </div>
-                <p style={{ fontSize:12, color:cl.t3, margin:0, lineHeight:1.45 }}>{f.detail}</p>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Promise */}
-        <div style={{ ...card({ background:"rgba(244,162,68,0.06)", borderColor:"rgba(244,162,68,0.2)", marginBottom:16 }) }}>
-          <p style={{ fontSize:12, color:"#f4c06a", margin:0, lineHeight:1.6 }}>
-            <strong>Your limit will never drop if you repay on time.</strong> We only increase limits — never decrease them for on-time repayers. If your score changes we'll always tell you why.
-          </p>
-        </div>
-
-        <button onClick={onClose} style={{ width:"100%", background:cl.accent, color:cl.accentFg, border:"none", borderRadius:14, padding:14, fontSize:15, fontWeight:600, cursor:"pointer" }}>
-          Got it
-        </button>
       </div>
     </div>
   );
@@ -375,7 +257,7 @@ function CancelScreen({ onBack }) {
           </div>
         ))}
         <p style={{ fontSize:11, color:cl.t3, margin:"8px 0 0", lineHeight:1.5 }}>
-          Float advances and credit monitoring pause until you resubscribe.
+          Credit monitoring pauses until you resubscribe.
         </p>
       </div>
 
@@ -396,22 +278,29 @@ export default function LucidApp() {
   const [tab, setTab]           = useState("home");
   const [meScreen, setMeScreen] = useState("overview");
   const [showCancel, setShowCancel] = useState(false);
-  const [realTxns, setRealTxns]     = useState(null); // null = using demo data
-  const [realSummary, setRealSummary] = useState(null);
+  // Imported bank statements, oldest first. Home/Budget show the most recent
+  // one (realSummary/realTxns below); Ask Lucid gets the full combined history.
+  const [statements, setStatements] = useState(() => loadPersisted().statements || []);
   const [importing, setImporting]   = useState(false);
   const [importError, setImportError] = useState("");
   const fileInputRef = useRef(null);
-  const [msgs, setMsgs] = useState([
+  const [msgs, setMsgs] = useState(() => loadPersisted().msgs || [
     { role:"ai", text:"Hey Gabe 👋 I'm Lucid — your AI finance assistant. I can see your accounts, spending, and credit score. Ask me anything." }
   ]);
   const [inp, setInp]         = useState("");
   const [typing, setTyping]   = useState(false);
+  const [autoSave, setAutoSave] = useState(() => loadPersisted().autoSave ?? false);
+  const [roundUp, setRoundUp]   = useState(() => loadPersisted().roundUp ?? true);
   const [connectedBanks, setConnectedBanks] = useState([
     { id:"monzo",   name:"Monzo",   bg:"#ff6b35", init:"M", accounts:[{ name:"Personal", balance:247.83 }] },
     { id:"barclays",name:"Barclays",bg:"#00aeef", init:"B", accounts:[{ name:"Savings",  balance:430.00 }] },
   ]);
   const [bankStep, setBankStep]         = useState(0);
   const [connectingBank, setConnectingBank] = useState(null);
+
+  const latestStatement = statements.length ? statements[statements.length - 1] : null;
+  const realSummary = latestStatement;
+  const realTxns = latestStatement ? latestStatement.transactions : null;
 
   useEffect(() => {
     const link = document.createElement("link");
@@ -420,36 +309,62 @@ export default function LucidApp() {
     document.head.appendChild(link);
   }, []);
 
-  // ── Claude API — routed through /api/claude serverless proxy ────────────────
+  // Persist what's worth keeping across reloads — imported statements, chat
+  // history (capped so localStorage doesn't grow unbounded), savings toggles.
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        statements,
+        msgs: msgs.slice(-100),
+        autoSave,
+        roundUp,
+      }));
+    } catch {
+      // storage full or unavailable (e.g. private browsing) — non-fatal
+    }
+  }, [statements, msgs, autoSave, roundUp]);
+
+  // ── Gemini API — routed through /api/gemini serverless proxy ────────────────
   const sendMsg = async () => {
     if (!inp.trim()) return;
     const q = inp.trim(); setInp("");
     setMsgs(m => [...m, { role:"user", text:q }]);
     setTyping(true);
 
+    // Combined view across every imported statement, not just the latest —
+    // Gemini's context window is large enough to hold the full transaction
+    // history for a personal-scale account, so there's no need for a
+    // separate retrieval step here.
+    const allTxns = statements.flatMap(s => s.transactions);
+    const combinedCatTotals = {};
+    allTxns.forEach(t => {
+      if (t.amount < 0) {
+        const cat = t.category || "Other";
+        combinedCatTotals[cat] = (combinedCatTotals[cat] || 0) + Math.abs(t.amount);
+      }
+    });
+    const combinedIn  = allTxns.filter(t => t.amount > 0).reduce((s,t) => s+t.amount, 0);
+    const combinedOut = allTxns.filter(t => t.amount < 0).reduce((s,t) => s+Math.abs(t.amount), 0);
+
     // Use real imported data when available, otherwise demo figures
-    const dataContext = realSummary
-      ? `User data (from imported ${realSummary.fileType} statement — REAL data): 
-Account: ${realSummary.accountName}, Period: ${realSummary.period},
-Money in: £${realSummary.totalIn.toFixed(2)}, Money out: £${realSummary.totalOut.toFixed(2)},
-Closing balance: £${realSummary.closingBalance.toFixed(2)}.
-Spending by category: ${Object.entries(realSummary.catTotals).map(([k,v]) => `${k} £${v.toFixed(2)}`).join(", ")}.
-Individual transactions available: ${realTxns?.length || 0} total — recent ones: ${realTxns?.slice(0,15).map(t => `${t.date} ${t.merchant} £${t.amount}`).join("; ")}.`
+    const dataContext = statements.length
+      ? `User data (from ${statements.length} imported statement${statements.length > 1 ? "s" : ""} — REAL data):
+Most recent: ${latestStatement.accountName}, period ${latestStatement.period}, closing balance £${latestStatement.closingBalance.toFixed(2)}.
+Combined across all imported statements — money in: £${combinedIn.toFixed(2)}, money out: £${combinedOut.toFixed(2)}.
+Spending by category (all time): ${Object.entries(combinedCatTotals).sort((a,b) => b[1]-a[1]).map(([k,v]) => `${k} £${v.toFixed(2)}`).join(", ")}.
+Full transaction history (${allTxns.length} transactions): ${allTxns.map(t => `${t.date} ${t.merchant} £${t.amount}`).join("; ")}.`
       : `User data (DEMO data, not real): Name: Gabe, Balance: £247.83 (Monzo), Savings: £430 at 4.1% AER (Barclays),
 Pay cycle: 18 Apr→26 Apr (9 days left), Income: £1,850/mo, Spent: £1,102, Left: £748,
-Float available: £175 (interest-free, repaid payday), Credit score: 612/999 (Fair, Experian),
-Credit utilisation: 55% (target <30%), Not on electoral roll, Plan: Free tier.`;
+Credit score: 612/999 (Fair, Experian), Credit utilisation: 55% (target <30%), Not on electoral roll, Plan: Free tier.`;
 
     try {
       const res = await fetch("/api/gemini", {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
-          model:"claude-sonnet-4-20250514",
           max_tokens:1000,
           system:`You are Lucid, a UK-based AI financial assistant. Honest, direct, never upsell.
 ${dataContext}
-Float fees: Standard free, Next day £1.99, Instant £1.49–£4.49. Full amount in ONE transfer always.
 Concise under 120 words, UK English, **bold** key figures only.`,
           messages: msgs.concat([{role:"user",text:q}])
             .map(m => ({ role: m.role==="ai"?"assistant":"user", content: m.text }))
@@ -543,7 +458,6 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({
-          model:"claude-sonnet-4-20250514",
           max_tokens:8000,
           messages:[{ role:"user", content }]
         })
@@ -594,21 +508,23 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
       const totalIn  = summary?.totalIn  || parsedTxns.filter(t=>t.amount>0).reduce((s,t)=>s+t.amount,0);
       const totalOut = summary?.totalOut || parsedTxns.filter(t=>t.amount<0).reduce((s,t)=>s+Math.abs(t.amount),0);
 
-      setRealTxns(parsedTxns);
-      setRealSummary({
+      setStatements(prev => [...prev, {
+        id: crypto.randomUUID?.() || String(Date.now()),
+        importedAt: Date.now(),
         accountName: summary?.accountName || "Your bank",
         period: summary?.period || "Imported",
         totalIn, totalOut,
         closingBalance: summary?.closingBalance || 0,
         catTotals,
         fileType: ext.toUpperCase(),
-      });
+        transactions: parsedTxns,
+      }]);
 
       const topSpend = Object.entries(catTotals)
         .sort((a,b)=>b[1]-a[1]).slice(0,3)
         .map(([k,v])=>`${k} £${v.toFixed(0)}`).join(" · ");
 
-      setMsgs([{ role:"ai", text:`Statement loaded ✅\n\n**${summary?.accountName || "Your bank"}** · ${summary?.period || ""}\n\n**In:** £${totalIn.toFixed(2)} · **Out:** £${totalOut.toFixed(2)}\n**Top spend:** ${topSpend}\n\nAsk me anything about your real spending.` }]);
+      setMsgs(m => [...m, { role:"ai", text:`Statement loaded ✅\n\n**${summary?.accountName || "Your bank"}** · ${summary?.period || ""}\n\n**In:** £${totalIn.toFixed(2)} · **Out:** £${totalOut.toFixed(2)}\n**Top spend:** ${topSpend}\n\nAsk me anything about your real spending.` }]);
 
       setTab("home");
 
@@ -728,23 +644,32 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
         </div>
       )}
 
-      {realSummary && (
-        <div style={{ ...card({ background:"rgba(100,240,72,0.06)", borderColor:"rgba(100,240,72,0.2)", marginBottom:12 }) }}>
-          <p style={{ fontSize:13, fontWeight:600, color:cl.accent, margin:"0 0 6px" }}>
-            ✅ {realSummary.accountName} loaded · {realSummary.fileType}
-          </p>
-          <p style={{ fontSize:12, color:cl.t2, margin:"0 0 2px" }}>{realSummary.period}</p>
-          <p style={{ fontSize:12, color:cl.t3, margin:0 }}>{realTxns?.length} transactions imported</p>
-        </div>
-      )}
-
-      {realSummary && (
-        <button
-          onClick={() => { setRealTxns(null); setRealSummary(null); setImportError(""); }}
-          style={{ width:"100%", background:"none", border:`1px solid ${cl.red}`, color:cl.red, borderRadius:14, padding:14, fontSize:14, cursor:"pointer", marginBottom:24 }}
-        >
-          Clear & return to demo data
-        </button>
+      {statements.length > 0 && (
+        <>
+          <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>
+            Imported statements ({statements.length})
+          </h3>
+          <div style={{ ...card({ marginBottom:12 }) }}>
+            {statements.map((s, i) => (
+              <div key={s.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"9px 0", borderBottom: i < statements.length-1 ? `1px solid ${cl.border}` : "none" }}>
+                <div>
+                  <p style={{ fontSize:13, color:cl.t1, fontWeight:500, margin:"0 0 2px" }}>{s.accountName} · {s.fileType}</p>
+                  <p style={{ fontSize:11, color:cl.t3, margin:0 }}>{s.period} · {s.transactions.length} transactions</p>
+                </div>
+                <button
+                  onClick={() => setStatements(prev => prev.filter(x => x.id !== s.id))}
+                  style={{ background:"none", border:`1px solid ${cl.border}`, color:cl.t3, borderRadius:8, padding:"4px 8px", cursor:"pointer", fontSize:12, flexShrink:0 }}
+                >Remove</button>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={() => { setStatements([]); setImportError(""); }}
+            style={{ width:"100%", background:"none", border:`1px solid ${cl.red}`, color:cl.red, borderRadius:14, padding:14, fontSize:14, cursor:"pointer", marginBottom:24 }}
+          >
+            Clear all & return to demo data
+          </button>
+        </>
       )}
     </div>
   );
@@ -753,7 +678,7 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
   const activeTxns = realTxns || txns;
 
   // ─────────────────────────────────────────────────────────────────────────
-  // HOME — now shows Float eligibility pre-paywall
+  // HOME
   // ─────────────────────────────────────────────────────────────────────────
   const HomeScreen = () => {
     const balance = realSummary ? realSummary.closingBalance : 677.83;
@@ -802,9 +727,8 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
       </div>
 
       {/* Quick actions */}
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr 1fr", gap:8, marginBottom:14 }}>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8, marginBottom:14 }}>
         {[
-          { icon:"💸", label:"Float",  fn:() => setTab("float") },
           { icon:"🏦", label:"Save",   fn:() => setTab("save") },
           { icon:"📊", label:"Budget", fn:() => setTab("budget") },
           { icon:"★",  label:"Credit", fn:() => { setTab("me"); setMeScreen("credit"); } },
@@ -814,22 +738,6 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
             <div style={{ fontSize:11, color:cl.t2 }}>{label}</div>
           </button>
         ))}
-      </div>
-
-      {/* ── NEW: Float eligibility card — visible BEFORE paywall ── */}
-      <div onClick={() => setTab("float")} style={{ ...card({ cursor:"pointer", marginBottom:12, background:cl.s1, position:"relative", overflow:"hidden" }), borderColor:"rgba(100,240,72,0.3)" }}>
-        <div style={{ position:"absolute", top:0, right:0, background:cl.accent, color:cl.accentFg, fontSize:10, fontWeight:700, padding:"4px 12px", borderRadius:"0 14px 0 10px" }}>NO SUBSCRIPTION NEEDED</div>
-        <p style={{ fontSize:11, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 4px" }}>Float — interest-free advance</p>
-        <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:8 }}>
-          <span style={{ fontFamily:fs, fontSize:38, fontWeight:600, color:cl.t1, lineHeight:1 }}>£175</span>
-          <span style={{ fontSize:12, color:cl.t3 }}>available right now</span>
-        </div>
-        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          {["0% interest", "No credit check", "Repaid 26 Apr", "One transfer, one fee"].map(tag => (
-            <span key={tag} style={{ fontSize:11, background:"rgba(100,240,72,0.1)", color:cl.accent, padding:"3px 9px", borderRadius:20 }}>{tag}</span>
-          ))}
-        </div>
-        <p style={{ fontSize:11, color:cl.t3, margin:"8px 0 0" }}>Tap to see full fee schedule before borrowing →</p>
       </div>
 
       {/* Credit nudge */}
@@ -877,11 +785,18 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
   // ─────────────────────────────────────────────────────────────────────────
   // BUDGET
   // ─────────────────────────────────────────────────────────────────────────
-  const BudgetScreen = () => (
+  const BudgetScreen = () => {
+    const totalIn = realSummary ? realSummary.totalIn : 1850;
+    const totalOut = realSummary ? realSummary.totalOut : 1102;
+    const left = totalIn - totalOut;
+    const period = realSummary ? realSummary.period : "18 Apr → 26 Apr";
+    const catEntries = realSummary ? Object.entries(realSummary.catTotals).sort((a,b) => b[1]-a[1]) : null;
+
+    return (
     <div style={{ padding:"0 18px" }}>
-      <PageHeader title="18 Apr → 26 Apr" sub="Pay cycle budget" />
+      <PageHeader title={period} sub="Pay cycle budget" />
       <div style={{ ...card({ display:"flex", justifyContent:"space-between", marginBottom:12 }) }}>
-        {[{l:"Income",v:"£1,850",c:cl.t1},{l:"Spent",v:"£1,102",c:cl.warn},{l:"Left",v:"£748",c:cl.accent}].map(({ l, v, c }) => (
+        {[{l:"Income",v:`£${totalIn.toFixed(0)}`,c:cl.t1},{l:"Spent",v:`£${totalOut.toFixed(0)}`,c:cl.warn},{l:"Left",v:`£${left.toFixed(0)}`,c:cl.accent}].map(({ l, v, c }) => (
           <div key={l} style={{ textAlign:"center" }}>
             <p style={{ fontSize:19, fontWeight:600, color:c, margin:"0 0 3px" }}>{v}</p>
             <p style={{ fontSize:11, color:cl.t3, margin:0 }}>{l}</p>
@@ -891,196 +806,37 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
       <div style={{ ...card({ background:"rgba(100,240,72,0.05)", borderColor:"rgba(100,240,72,0.18)", marginBottom:14 }) }}>
         <p style={{ fontSize:12, color:"#9fe88a", margin:0, lineHeight:1.55 }}>✓ <strong>Payday-cycle budgeting</strong> — resets on your actual pay date, not the 1st.</p>
       </div>
-      <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>Categories</h3>
-      <div style={{ ...card({ marginBottom:14 }) }}>{cats.map((c, i) => <CatBar key={i} {...c} />)}</div>
-      <div style={{ ...card({ background:"rgba(242,101,80,0.06)", borderColor:"rgba(242,101,80,0.2)", marginBottom:14 }) }}>
-        <p style={{ fontSize:13, fontWeight:500, color:cl.red, margin:"0 0 2px" }}>🎉 Going out — £6.80 over budget</p>
-        <p style={{ fontSize:12, color:cl.t3, margin:0 }}>9 days left to recover.</p>
+      <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>
+        {realSummary ? "Spending by category (share of total)" : "Categories"}
+      </h3>
+      <div style={{ ...card({ marginBottom:14 }) }}>
+        {realSummary
+          ? catEntries.map(([name, amt]) => <CatBar key={name} name={name} amt={amt} lim={totalOut} color={cl.accent} icon="💳" />)
+          : cats.map((c, i) => <CatBar key={i} {...c} />)
+        }
       </div>
+      {!realSummary && (
+        <div style={{ ...card({ background:"rgba(242,101,80,0.06)", borderColor:"rgba(242,101,80,0.2)", marginBottom:14 }) }}>
+          <p style={{ fontSize:13, fontWeight:500, color:cl.red, margin:"0 0 2px" }}>🎉 Going out — £6.80 over budget</p>
+          <p style={{ fontSize:12, color:cl.t3, margin:0 }}>9 days left to recover.</p>
+        </div>
+      )}
       <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>All transactions</h3>
       <div style={{ ...card(), marginBottom:24 }}>
-        {txns.map((t, i) => (
-          <div key={i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 0", borderBottom: i < txns.length-1 ? `1px solid ${cl.border}` : "none" }}>
+        {activeTxns.map((t, i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 0", borderBottom: i < activeTxns.length-1 ? `1px solid ${cl.border}` : "none" }}>
             <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-              <div style={{ width:30, height:30, borderRadius:8, background:cl.s1, display:"flex", alignItems:"center", justifyContent:"center", fontSize:14 }}>{t.i}</div>
+              <div style={{ width:30, height:30, borderRadius:8, background:cl.s1, display:"flex", alignItems:"center", justifyContent:"center", fontSize:14 }}>{t.i || t.icon || "💳"}</div>
               <div>
-                <p style={{ fontSize:13, color:cl.t1, fontWeight:500, margin:0 }}>{t.m}</p>
-                <p style={{ fontSize:11, color:cl.t3, margin:0 }}>{t.cat} · {t.d}</p>
+                <p style={{ fontSize:13, color:cl.t1, fontWeight:500, margin:0 }}>{t.m || t.merchant}</p>
+                <p style={{ fontSize:11, color:cl.t3, margin:0 }}>{t.cat || t.category} · {t.d || t.date}</p>
               </div>
             </div>
-            <span style={{ fontSize:13, fontWeight:600, color:t.a > 0 ? cl.accent : cl.t1 }}>{t.a > 0 ? "+" : ""}£{Math.abs(t.a).toFixed(2)}</span>
+            <span style={{ fontSize:13, fontWeight:600, color:(t.a ?? t.amount) > 0 ? cl.accent : cl.t1 }}>{(t.a ?? t.amount) > 0 ? "+" : ""}£{Math.abs(t.a ?? t.amount).toFixed(2)}</span>
           </div>
         ))}
       </div>
     </div>
-  );
-
-  // ─────────────────────────────────────────────────────────────────────────
-  // FLOAT — with Float Score + Fee Receipt
-  // ─────────────────────────────────────────────────────────────────────────
-  const FloatScreen = () => {
-    const [step, setStep]         = useState(0);
-    const [amt, setAmt]           = useState(100);
-    const [speed, setSpeed]       = useState("free");
-    const [done, setDone]         = useState(false);
-    const [showReceipt, setShowReceipt] = useState(false);
-    const [showScore, setShowScore]     = useState(false);
-    const fee = getFloatFee(amt, speed), recv = amt - fee;
-
-    if (done) return (
-      <>
-        <div style={{ padding:"0 18px", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minHeight:"80vh", textAlign:"center" }}>
-          <div style={{ fontSize:60, marginBottom:16 }}>✅</div>
-          <h2 style={{ fontFamily:fs, fontSize:32, color:cl.t1, margin:"0 0 8px" }}>Float sent</h2>
-          <p style={{ fontSize:16, color:cl.accent, margin:"0 0 4px" }}>£{recv.toFixed(2)} on its way</p>
-          <p style={{ fontSize:12, color:cl.t3, marginBottom:6 }}>
-            {speed==="free" ? "1–3 business days · free" : speed==="next" ? "Tomorrow · £1.99" : `Within minutes · £${fee.toFixed(2)}`}
-          </p>
-          <p style={{ fontSize:12, color:cl.t3, marginBottom:22 }}>
-            Repayment of <strong style={{ color:cl.t2 }}>£{amt.toFixed(2)}</strong> on <strong style={{ color:cl.t2 }}>26 Apr</strong> · 0% interest
-          </p>
-          <button onClick={() => setShowReceipt(true)} style={{ width:"100%", background:"none", border:`1px solid ${cl.accent}`, color:cl.accent, borderRadius:14, padding:14, fontSize:14, cursor:"pointer", marginBottom:10 }}>
-            View fee receipt →
-          </button>
-          <button onClick={() => { setDone(false); setStep(0); setTab("home"); }} style={{ width:"100%", background:cl.accent, color:cl.accentFg, border:"none", borderRadius:14, padding:14, fontSize:15, fontWeight:600, cursor:"pointer" }}>
-            Back to home
-          </button>
-        </div>
-        {showReceipt && <FeeReceipt amt={amt} fee={fee} recv={recv} speed={speed} repayDate="26 Apr 2026" onClose={() => setShowReceipt(false)} />}
-      </>
-    );
-
-    return (
-      <>
-        <div style={{ padding:"0 18px" }}>
-          <PageHeader title="Float" sub="Interest-free · no credit check" />
-
-          {/* Step indicator */}
-          <div style={{ display:"flex", gap:6, marginBottom:18 }}>
-            {["Fees","Amount","Confirm"].map((s, i) => (
-              <div key={s} style={{ display:"flex", alignItems:"center", gap:5 }}>
-                <div style={{ width:22, height:22, borderRadius:"50%", background: step>=i ? cl.accent : cl.border, color: step>=i ? cl.accentFg : cl.t3, fontSize:11, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center" }}>{i+1}</div>
-                <span style={{ fontSize:11, color: step===i ? cl.t1 : cl.t3 }}>{s}</span>
-                {i < 2 && <span style={{ color:cl.t3, fontSize:10 }}>›</span>}
-              </div>
-            ))}
-          </div>
-
-          {/* ── STEP 0: Fees first ─────────────────────────────────────────── */}
-          {step===0 && (<>
-            <div style={{ ...gradCard({ marginBottom:12 }) }}>
-              <p style={{ fontSize:11, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 5px" }}>Available now</p>
-              <p style={{ fontFamily:fs, fontSize:40, fontWeight:600, color:cl.t1, margin:"0 0 3px", lineHeight:1 }}>£175</p>
-              <p style={{ fontSize:12, color:cl.t3, margin:"0 0 12px" }}>repaid 26 Apr · 0% interest · no credit check</p>
-              {/* Float score link */}
-              <button onClick={() => setShowScore(true)} style={{ background:"none", border:`1px solid rgba(100,240,72,0.3)`, color:cl.accent, borderRadius:10, padding:"6px 12px", fontSize:12, cursor:"pointer" }}>
-                Why £175? See your Float score →
-              </button>
-            </div>
-
-            {/* Guarantee banner */}
-            <div style={{ ...card({ background:"rgba(100,240,72,0.07)", borderColor:"rgba(100,240,72,0.3)", marginBottom:12, display:"flex", gap:14, alignItems:"flex-start" }) }}>
-              <div style={{ width:36, height:36, borderRadius:10, background:"rgba(100,240,72,0.15)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0 }}>🛡️</div>
-              <div>
-                <p style={{ fontSize:13, fontWeight:600, color:cl.accent, margin:"0 0 3px" }}>Full-amount guarantee</p>
-                <p style={{ fontSize:12, color:cl.t2, margin:0, lineHeight:1.5 }}>Your entire amount arrives in <strong style={{ color:cl.t1 }}>one transfer</strong>, one fee. We never split advances into daily tranches to charge fees multiple times.</p>
-              </div>
-            </div>
-
-            <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 9px" }}>Complete fee schedule</h3>
-            <div style={{ ...card({ marginBottom:12 }) }}>
-              <p style={{ fontSize:12, color:cl.t3, margin:"0 0 10px", lineHeight:1.5 }}>Every charge that exists. Nothing else:</p>
-              {[
-                ["Standard transfer (1–3 days)", "FREE",     true  ],
-                ["Next-day transfer",             "£1.99 flat",false],
-                ["Instant · £1–50",               "£1.49",    false],
-                ["Instant · £51–100",             "£2.49",    false],
-                ["Instant · £101–150",            "£3.49",    false],
-                ["Instant · £151–175",            "£4.49",    false],
-              ].map(([l, f, hi]) => (
-                <div key={l} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 10px", borderRadius:8, background: hi ? "rgba(100,240,72,0.07)" : "transparent", marginBottom:2 }}>
-                  <span style={{ fontSize:13, color:cl.t2 }}>{l}</span>
-                  <span style={{ fontSize:13, fontWeight:600, color: hi ? cl.accent : cl.t1 }}>{f}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{ ...card({ background:"rgba(244,162,68,0.06)", borderColor:"rgba(244,162,68,0.2)", marginBottom:16 }) }}>
-              <p style={{ fontSize:12, color:"#f4c06a", margin:0, lineHeight:1.55 }}>⚡ Repay on time and your limit stays stable or grows. It will never silently drop. If anything changes we'll tell you exactly why.</p>
-            </div>
-            <button onClick={() => setStep(1)} style={{ width:"100%", background:cl.accent, color:cl.accentFg, border:"none", borderRadius:14, padding:16, fontSize:15, fontWeight:600, cursor:"pointer", marginBottom:22 }}>Choose amount →</button>
-          </>)}
-
-          {/* ── STEP 1: Amount + speed ─────────────────────────────────────── */}
-          {step===1 && (<>
-            <div style={{ ...card({ textAlign:"center", marginBottom:12 }) }}>
-              <p style={{ fontFamily:fs, fontSize:52, fontWeight:600, color:cl.t1, margin:"0 0 8px", lineHeight:1 }}>£{amt}</p>
-              <input type="range" min={10} max={175} step={5} value={amt} onChange={e => setAmt(Number(e.target.value))} style={{ width:"100%", accentColor:cl.accent, marginBottom:4 }} />
-              <div style={{ display:"flex", justifyContent:"space-between" }}>
-                <span style={{ fontSize:11, color:cl.t3 }}>£10</span>
-                <span style={{ fontSize:11, color:cl.t3 }}>£175</span>
-              </div>
-            </div>
-            {[
-              { key:"free",    l:"Standard", s:"1–3 business days", f:0 },
-              { key:"next",    l:"Next day", s:"By tomorrow",       f:1.99 },
-              { key:"instant", l:"Instant",  s:"Within minutes",    f:getFloatFee(amt,"instant") },
-            ].map(({ key, l, s, f }) => (
-              <div key={key} onClick={() => setSpeed(key)} style={{ ...card({ display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer", marginBottom:8, borderColor: speed===key ? cl.accent : cl.border, background: speed===key ? "rgba(100,240,72,0.06)" : cl.s2 }) }}>
-                <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                  <div style={{ width:18, height:18, borderRadius:"50%", border:`2px solid ${speed===key ? cl.accent : cl.t3}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-                    {speed===key && <div style={{ width:8, height:8, borderRadius:"50%", background:cl.accent }} />}
-                  </div>
-                  <div><p style={{ fontSize:14, color:cl.t1, fontWeight:500, margin:0 }}>{l}</p><p style={{ fontSize:12, color:cl.t3, margin:0 }}>{s}</p></div>
-                </div>
-                <span style={{ fontSize:14, fontWeight:600, color: f===0 ? cl.accent : cl.warn }}>{f===0 ? "Free" : `+£${f.toFixed(2)}`}</span>
-              </div>
-            ))}
-            {/* Live cost summary */}
-            <div style={{ ...card({ background:cl.s1, margin:"12px 0 14px" }) }}>
-              {[["Requested",`£${amt.toFixed(2)}`],["Fee", fee===0?"None":`-£${fee.toFixed(2)}`],["You receive",`£${recv.toFixed(2)}`]].map(([k,v],i) => (
-                <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"7px 0", borderBottom: i<2 ? `1px solid ${cl.border}` : "none" }}>
-                  <span style={{ fontSize:13, color:cl.t3 }}>{k}</span>
-                  <span style={{ fontSize:13, fontWeight: i===2?700:500, color: i===1&&fee>0?cl.warn:i===1?cl.accent:cl.t1 }}>{v}</span>
-                </div>
-              ))}
-              <p style={{ fontSize:11, color:cl.t3, margin:"7px 0 0" }}>Repayment of £{amt.toFixed(2)} on 26 Apr · 0% interest</p>
-            </div>
-            <div style={{ display:"flex", gap:10, marginBottom:22 }}>
-              <button onClick={() => setStep(0)} style={{ flex:1, background:"none", border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:14, padding:14, fontSize:14, cursor:"pointer" }}>← Back</button>
-              <button onClick={() => setStep(2)} style={{ flex:2, background:cl.accent, color:cl.accentFg, border:"none", borderRadius:14, padding:14, fontSize:15, fontWeight:600, cursor:"pointer" }}>Review →</button>
-            </div>
-          </>)}
-
-          {/* ── STEP 2: Confirm ────────────────────────────────────────────── */}
-          {step===2 && (<>
-            <div style={{ ...card({ textAlign:"center", padding:"24px 20px", marginBottom:12 }) }}>
-              <p style={{ fontSize:11, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 5px" }}>You'll receive</p>
-              <p style={{ fontFamily:fs, fontSize:46, fontWeight:600, color:cl.t1, margin:"0 0 4px", lineHeight:1 }}>£{recv.toFixed(2)}</p>
-              <p style={{ fontSize:13, color:cl.t3 }}>{speed==="free"?"1–3 days · free":speed==="next"?`Tomorrow · £1.99`:`Minutes · £${fee.toFixed(2)}`}</p>
-            </div>
-            {/* Guarantee reminder */}
-            <div style={{ ...card({ background:"rgba(100,240,72,0.06)", borderColor:"rgba(100,240,72,0.2)", marginBottom:12 }) }}>
-              <p style={{ fontSize:12, color:cl.accent, fontWeight:600, margin:"0 0 2px" }}>🛡️ Full-amount guarantee applies</p>
-              <p style={{ fontSize:12, color:cl.t3, margin:0 }}>£{recv.toFixed(2)} arrives in one transfer. A fee receipt will be generated automatically.</p>
-            </div>
-            <div style={{ ...card({ marginBottom:16 }) }}>
-              {[["Amount",`£${amt.toFixed(2)}`],["Fee",fee===0?"None":`£${fee.toFixed(2)}`],["You receive",`£${recv.toFixed(2)}`],["Repayment","26 Apr 2026"],["Interest","0% — none"],["Credit check","None"]].map(([k,v]) => (
-                <div key={k} style={{ display:"flex", justifyContent:"space-between", padding:"8px 0", borderBottom:`1px solid ${cl.border}` }}>
-                  <span style={{ fontSize:13, color:cl.t3 }}>{k}</span>
-                  <span style={{ fontSize:13, fontWeight:500, color:cl.t1 }}>{v}</span>
-                </div>
-              ))}
-            </div>
-            <div style={{ display:"flex", gap:10, marginBottom:22 }}>
-              <button onClick={() => setStep(1)} style={{ flex:1, background:"none", border:`1px solid ${cl.border}`, color:cl.t2, borderRadius:14, padding:14, fontSize:14, cursor:"pointer" }}>← Edit</button>
-              <button onClick={() => setDone(true)} style={{ flex:2, background:cl.accent, color:cl.accentFg, border:"none", borderRadius:14, padding:14, fontSize:15, fontWeight:600, cursor:"pointer" }}>Confirm ✓</button>
-            </div>
-          </>)}
-        </div>
-
-        {/* Panels */}
-        {showScore   && <FloatScorePanel onClose={() => setShowScore(false)} />}
-      </>
     );
   };
 
@@ -1088,8 +844,6 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
   // SAVE
   // ─────────────────────────────────────────────────────────────────────────
   const SaveScreen = () => {
-    const [autoSave, setAutoSave] = useState(false);
-    const [roundUp,  setRoundUp]  = useState(true);
     return (
       <div style={{ padding:"0 18px" }}>
         <PageHeader title="Savings" sub="Easy access · FSCS protected up to £85k" />
@@ -1170,7 +924,7 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
           <p style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:0 }}>Your plan</p>
           <span style={{ fontSize:12, color:cl.t3, background:cl.s1, padding:"4px 10px", borderRadius:20, border:`1px solid ${cl.border}` }}>Free</span>
         </div>
-        <p style={{ fontSize:13, color:cl.t1, margin:"0 0 3px" }}>Upgrade to <strong style={{ color:cl.accent }}>Plus (£4.99/mo)</strong> for Float up to £200, instant transfers, credit monitoring →</p>
+        <p style={{ fontSize:13, color:cl.t1, margin:"0 0 3px" }}>Upgrade to <strong style={{ color:cl.accent }}>Plus (£4.99/mo)</strong> for credit score monitoring, Open Banking and priority support →</p>
       </div>
 
       {/* ── NEW: Cancel / account settings ── */}
@@ -1373,7 +1127,6 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
   const navItems = [
     { key:"home",   icon:"◉", label:"Home"   },
     { key:"budget", icon:"◈", label:"Budget" },
-    { key:"float",  icon:"◇", label:"Float"  },
     { key:"save",   icon:"◎", label:"Save"   },
     { key:"ask",    icon:"💬", label:"Ask"    },
     { key:"me",     icon:"○", label:"Me"     },
@@ -1395,7 +1148,6 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
       <div style={{ flex:1, overflowY:"auto", paddingBottom:84, display: isAsk ? "none" : "block" }}>
         {tab==="home"   && <HomeScreen />}
         {tab==="budget" && <BudgetScreen />}
-        {tab==="float"  && <FloatScreen />}
         {tab==="save"   && <SaveScreen />}
         {tab==="import" && <ImportScreen />}
         {tab==="me"     && !showCancel && <MeScreen />}
@@ -1417,7 +1169,7 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
         {/* Quick prompts */}
         {msgs.length < 2 && (
           <div style={{ padding:"10px 18px 4px", display:"flex", flexWrap:"wrap", gap:7 }}>
-            {["What are your fees?","How's my budget?","Can I get a Float?","How's my credit?"].map(q => (
+            {["How's my budget?","What's my top spending category?","How's my credit?","Any subscriptions I should cancel?"].map(q => (
               <button key={q}
                 onMouseDown={e => { e.preventDefault(); setInp(q); }}
                 onTouchEnd={e => { e.preventDefault(); setInp(q); askInputRef.current?.focus(); }}
