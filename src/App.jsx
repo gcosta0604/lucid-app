@@ -143,6 +143,56 @@ function CatBar({ name, amt, lim, color, icon }) {
   );
 }
 
+// Colour palette for category segments when the categories come from real
+// imported data (no per-category colour is assigned by the extraction step).
+const catPalette = [cl.accent, cl.blue, cl.purple, cl.warn, cl.red, "#34d399", "#f97316", "#818cf8", "#eab308", "#ec4899"];
+
+function CategoryDonut({ entries, size = 140 }) {
+  const total = entries.reduce((s, e) => s + e.amt, 0) || 1;
+  const r = 52, cx = 60, cy = 60, circ = 2 * Math.PI * r;
+  let offset = 0;
+  return (
+    <svg width={size} height={size} viewBox="0 0 120 120">
+      <circle cx={cx} cy={cy} r={r} fill="none" stroke={cl.border} strokeWidth="14" />
+      {entries.map((e, i) => {
+        const dash = (e.amt / total) * circ;
+        const el = (
+          <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={e.color} strokeWidth="14"
+            strokeDasharray={`${dash} ${circ - dash}`} strokeDashoffset={-offset}
+            transform={`rotate(-90 ${cx} ${cy})`} style={{ transition: "stroke-dasharray 0.6s" }} />
+        );
+        offset += dash;
+        return el;
+      })}
+      <text x={cx} y={cy - 4} textAnchor="middle" fill={cl.t1} fontSize="16" fontFamily={ff} fontWeight="600">£{Math.round(total)}</text>
+      <text x={cx} y={cy + 12} textAnchor="middle" fill={cl.t3} fontSize="9" fontFamily={ff}>total spend</text>
+    </svg>
+  );
+}
+
+function SpendTrendChart({ data }) {
+  const w = 290, drawH = 70, topPad = 18, botPad = 16, gap = 10;
+  const h = drawH + topPad + botPad;
+  const max = Math.max(...data.map(d => d.amt), 1);
+  const barW = (w - gap * (data.length - 1)) / data.length;
+  return (
+    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMidYMid meet">
+      {data.map((d, i) => {
+        const barH = Math.max((d.amt / max) * drawH, 2);
+        const x = i * (barW + gap);
+        const y = topPad + (drawH - barH);
+        return (
+          <g key={i}>
+            <text x={x + barW/2} y={topPad - 6} textAnchor="middle" fill={cl.t2} fontSize="10" fontFamily={ff} fontWeight="600">£{Math.round(d.amt)}</text>
+            <rect x={x} y={y} width={barW} height={barH} fill={cl.accent} rx={4} style={{ transition:"height 0.5s, y 0.5s" }} />
+            <text x={x + barW/2} y={h - 2} textAnchor="middle" fill={cl.t3} fontSize="9" fontFamily={ff}>{d.label}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ── NEW: Instant Cancel Screen
 // ─────────────────────────────────────────────────────────────────────────────
@@ -792,6 +842,19 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
     const period = realSummary ? realSummary.period : "18 Apr → 26 Apr";
     const catEntries = realSummary ? Object.entries(realSummary.catTotals).sort((a,b) => b[1]-a[1]) : null;
 
+    const donutEntries = (realSummary
+      ? catEntries.map(([name, amt]) => ({ name, amt }))
+      : [...cats].sort((a,b) => b.amt - a.amt).map(c => ({ name: c.name, amt: c.amt }))
+    ).map((e, i) => ({ ...e, color: catPalette[i % catPalette.length] }));
+    const biggest = donutEntries[0];
+    const biggestPct = Math.round((biggest.amt / (donutEntries.reduce((s,e)=>s+e.amt,0) || 1)) * 100);
+
+    // One bar per imported statement — only meaningful once there's a history to compare.
+    const trendData = statements.map(s => ({
+      label: (s.period.split(/[–—-]/)[0] || s.period).trim().slice(0, 8),
+      amt: s.totalOut,
+    }));
+
     return (
     <div style={{ padding:"0 18px" }}>
       <PageHeader title={period} sub="Pay cycle budget" />
@@ -806,6 +869,28 @@ Rules: debits negative, credits positive, clean merchant names (strip reference 
       <div style={{ ...card({ background:"rgba(100,240,72,0.05)", borderColor:"rgba(100,240,72,0.18)", marginBottom:14 }) }}>
         <p style={{ fontSize:12, color:"#9fe88a", margin:0, lineHeight:1.55 }}>✓ <strong>Payday-cycle budgeting</strong> — resets on your actual pay date, not the 1st.</p>
       </div>
+
+      {/* Spending breakdown donut */}
+      <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>Spending breakdown</h3>
+      <div style={{ ...card({ display:"flex", alignItems:"center", gap:16, marginBottom:14 }) }}>
+        <CategoryDonut entries={donutEntries} />
+        <div style={{ flex:1, minWidth:0 }}>
+          <p style={{ fontSize:12, color:cl.t3, margin:"0 0 4px" }}>Biggest category</p>
+          <p style={{ fontSize:16, color:cl.t1, fontWeight:600, margin:"0 0 2px" }}>{biggest.name}</p>
+          <p style={{ fontSize:13, color:cl.accent, margin:0 }}>£{biggest.amt.toFixed(0)} · {biggestPct}% of spend</p>
+        </div>
+      </div>
+
+      {/* Spending trend across imported statements */}
+      {trendData.length >= 2 && (
+        <>
+          <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>Spending trend</h3>
+          <div style={{ ...card({ marginBottom:14 }) }}>
+            <SpendTrendChart data={trendData} />
+          </div>
+        </>
+      )}
+
       <h3 style={{ fontSize:12, color:cl.t3, textTransform:"uppercase", letterSpacing:"0.06em", margin:"0 0 10px" }}>
         {realSummary ? "Spending by category (share of total)" : "Categories"}
       </h3>
